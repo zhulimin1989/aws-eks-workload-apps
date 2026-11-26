@@ -1,0 +1,108 @@
+# 业务 root Application — 集中式 range 渲染
+# 每条 values.applications.<name> + enabled=true → 渲染一个 Application
+# 加新产品 = values.yaml 加一条 entry,本文件**零改动**
+#
+# 支持两种 source 形态:
+#   1. 产品 appofapps:source.path(指向本仓 `./uat-aliyun-shanghai/apps` 第二层 chart)+ helm.valueFiles
+#      → 自动注入 cluster.{name,domain,env} 给二层 chart 用
+#   2. 直接装 upstream chart:source.chart + source.repoURL(指 helm repo)+ helm.values(inline yaml)
+#      → 不注入 cluster.* parameters
+{{- range $appName, $appData := .Values.applications }}
+{{- if $appData.enabled }}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{ $appName }}
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    {{- with $appData.additionalAnnotations }}
+    {{- range $key, $value := . }}
+    {{ $key }}: {{ $value | quote }}
+    {{- end }}
+    {{- end }}
+  {{- with $appData.additionalLabels }}
+  labels:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: {{ $appData.project | default "default" }}
+  source:
+    repoURL: {{ $appData.source.repoURL | quote }}
+    targetRevision: {{ $appData.source.targetRevision }}
+    {{- with $appData.source.path }}
+    path: {{ . }}
+    {{- end }}
+    {{- with $appData.source.chart }}
+    chart: {{ . }}
+    {{- end }}
+    {{- with $appData.source.helm }}
+    helm:
+      {{- with .valueFiles }}
+      valueFiles:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .values }}
+      values: |
+        {{- . | nindent 8 }}
+      {{- end }}
+      {{- if or $appData.source.path .parameters }}
+      parameters:
+        {{- with .parameters }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if $appData.source.path }}
+        # 只有产品 app-of-apps 才需要把 cluster.* 注入给第二层 chart。
+        # 优先用 entry 自带的 cluster context($appData.cluster),没有时回退到顶层 cluster。
+        # 用 sprig `dig` 做安全 nested lookup,避免 $appData.cluster 缺失时触发 nil panic。
+        - name: cluster.name
+          value: {{ dig "cluster" "name" $.Values.cluster.name $appData | quote }}
+        # cluster.domain 当前为空(UAT 上海首版走 NLB IP,无业务域名)。注入空值 `value: ""`
+        # 会让 ArgoCD 对 appofapps Application 反复产生 1 行空值漂移(已知 Helm 空参数毛病),
+        # 故先注释;appofapps 自身 values 仍有 domain:"" 默认透传给叶 chart,行为不变。
+        # - name: cluster.domain
+        #   value: {{ `{{ dig "cluster" "domain" $.Values.cluster.domain $appData | quote }}` }}
+        - name: cluster.env
+          value: {{ $.Values.spec.env | quote }}
+        # cluster.server / region 主要给跨 region 或多集群场景使用;当前UAT 上海环境显式传 `cn-shanghai`。
+        - name: cluster.server
+          value: {{ dig "cluster" "server" $.Values.spec.destination.server $appData | quote }}
+        - name: cluster.region
+          value: {{ dig "cluster" "region" "us-east-1" $appData | quote }}
+        {{- end }}
+      {{- end }}
+    {{- end }}
+  destination:
+    server: {{ $.Values.spec.destination.server }}
+    namespace: {{ $appData.namespace }}
+  {{- with $appData.syncPolicy }}
+  syncPolicy:
+    {{- toYaml . | nindent 4 }}
+  {{- else }}
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - Replace=true
+    retry:
+      limit: 2
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m0s
+  {{- end }}
+  {{- with $appData.ignoreDifferences }}
+  ignoreDifferences:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with $appData.info }}
+  info:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
+{{- end }}

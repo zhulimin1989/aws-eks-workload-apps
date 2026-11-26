@@ -1,0 +1,350 @@
+# raytone 产品所有 child Application(从 aws-eks-raytone-k8s 拉叶 manifest)
+spec:
+  destination:
+    server: https://kubernetes.default.svc
+
+# 由第一层 root Application 经 helm parameters 注入。
+cluster:
+  name: ""
+  domain: ""
+  env: ""
+
+applications:
+
+  # ─── platform:namespace / resourcequota / db-init Job(最早 sync) ───
+  codesphere-platform:
+    namespace: raytone-prod-aliyun-beijing
+    project: raytone-prod-aliyun-beijing
+    additionalAnnotations:
+      argocd.argoproj.io/sync-wave: "-100"
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aliyun-beijing/platform
+
+  # ─── gateway:Go LLM token 网关数据面(2026-05-20 并入 raytone 命名空间) ───
+  # 业务代码仓:tokenplatform-gateway.git;历史服务名 relitoken-gateway。
+  gateway:
+    enabled: true
+    namespace: raytone-prod-aliyun-beijing
+    project: raytone-prod-aliyun-beijing
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aliyun-beijing/gateway
+      helm:
+        releaseName: gateway
+        valueFiles: [values.yaml]
+
+  # ─── publisher:Go Redis Pub/Sub writer(2026-05-20 并入 raytone 命名空间) ───
+  # 业务代码仓:tokenplatform-publisher.git;历史服务名 relitoken-publisher。
+  publisher:
+    enabled: true
+    namespace: raytone-prod-aliyun-beijing
+    project: raytone-prod-aliyun-beijing
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aliyun-beijing/publisher
+      helm:
+        releaseName: publisher
+        valueFiles: [values.yaml]
+
+  # ─── tokenplatform-rawbody-consumer:Kafka gw.raw_body → PG raw_body_events ingest ───
+  # 业务代码:tokenplatform-rawbody-consumer.git;消费 MSK gw.raw_body topic,
+  # 写入专属库 tokenplatform_rawbody(2026-05-27 建)
+  tokenplatform-rawbody-consumer:
+    enabled: true    # 2026-08-06 恢复上线;生产端总闸见 gateway raw_body_event_enabled
+    namespace: raytone-prod-aliyun-beijing
+    project: raytone-prod-aliyun-beijing
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aliyun-beijing/tokenplatform-rawbody-consumer
+      helm:
+        releaseName: tokenplatform-rawbody-consumer
+        valueFiles: [values.yaml]
+
+  # ─── codesphere-saas:Python 后端 / SaaS BFF(沙箱编排 + billing/payment 代理) ───
+  codesphere-saas:
+    enabled: false   # 2026-09-10 下线(decommission);改回 true 即由 app-of-apps 重建全套资源。NAS PV Retain,数据不丢
+    namespace: raytone-prod-aliyun-beijing
+    project: raytone-prod-aliyun-beijing
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aliyun-beijing/codesphere-saas
+      helm:
+        releaseName: codesphere-saas
+        valueFiles: [values.yaml]
+
+  # ─── codesphere-frontend-saas:SaaS console SPA(北京环境不再占用 www 入口) ───
+  codesphere-frontend-saas:
+    enabled: false   # 2026-09-10 下线(decommission);改回 true 即由 app-of-apps 重建全套资源
+    namespace: raytone-prod-aliyun-beijing
+    project: raytone-prod-aliyun-beijing
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aliyun-beijing/codesphere-frontend-saas
+      helm:
+        releaseName: codesphere-frontend-saas
+        valueFiles: [values.yaml]
+
+  # ─── Raytone Studio 新链路 + 智能体广场(三件套,必须同批)───────────────────
+  #
+  # 前置(2026-09-07 全部完成并逐项实测,判据见
+  # aws-eks-raytone-k8s/docs/2026-09-07-studio-plaza-prod-aliyun-beijing.md):
+  #   ✔ ACR raytone-prod 下三个 repo 已建,三个镜像已推并验过产物
+  #     (web 必须 grep 到 platform.iruidong.com;plaza 必须无 /plaza/ 前缀)
+  #   ✔ 库 codesphere_public_saas / plaza 及属主角色已建,public schema 属主已修正
+  #   ✔ Secret 里 9+3 键全部就位并各有实测判据(product token 200、AgentSphere key 200、
+  #     模板在国内控制平面有活跃沙箱)
+  #   ✔ broker 的 SAAS_SSO_* 五键已进 codesphere-ops-user-api-config(仍待 rollout restart)
+  #   ✔ L4:kube-system/tcp-services 加 8088/8091,nginx-ingress-lb 补两个端口(带外)
+  #   ✔ 域名:studio./plaza.iruidong.com 走通配 DNS + 通配证书,零工作量;
+  #     223 的两个精确 server 块**刻意留到最后**(现在加只会把 401 变成 502)
+  #
+  # ★★ 启用顺序必须 skill-plaza → raytone-studio-api → raytone-studio-web:
+  #    studio-web 的 nginx 是字面量 upstream(proxy_pass http://raytone-studio-api;
+  #    与 http://skill-plaza/avatars/),启动期解析一次,上游 Service 不存在就 emerg 退出。
+  #    三者是独立 Application,跨 App 没有 sync-wave 顺序保证。
+  #    ⟹ 三个均已启用(2026-09-07):plaza 与 api 先起并验通(/api/health、/health/ready、
+  #      /api/auth/oidc/login 均 200),两个字面量 upstream 的 Service 已存在后才开 web。
+  #
+  # ★★ 前两个开启后必有一段 CreateContainerConfigError:Secret raytone-studio-plaza
+  #    还不存在,而两边的 secretKeyRef 都没有 optional: true。这是**预期且自愈**的 ——
+  #    等 chart 的 Secret(wave -5)落地后跑
+  #      python3 scripts/provision-studio-plaza-secret.py --context ... --namespace ... --apply
+  #    该脚本会先读 skill-plaza-secret 与 raytone-studio-api-secret 做环境校验,
+  #    所以**不能提前建**这个 Secret。别把这段窗口当故障回滚。
+  skill-plaza:
+    enabled: true
+    namespace: raytone-prod-aliyun-beijing
+    project: raytone-prod-aliyun-beijing
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aliyun-beijing/skill-plaza
+      helm:
+        releaseName: skill-plaza
+        valueFiles: [values.yaml]
+        parameters:
+          - name: enabled
+            value: "true"
+
+  raytone-studio-api:
+    enabled: true
+    namespace: raytone-prod-aliyun-beijing
+    project: raytone-prod-aliyun-beijing
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aliyun-beijing/raytone-studio-api
+      helm:
+        releaseName: raytone-studio-api
+        valueFiles: [values.yaml]
+        parameters:
+          - name: enabled
+            value: "true"
+
+  raytone-studio-web:
+    enabled: true
+    namespace: raytone-prod-aliyun-beijing
+    project: raytone-prod-aliyun-beijing
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aliyun-beijing/raytone-studio-web
+      helm:
+        releaseName: raytone-studio-web
+        valueFiles: [values.yaml]
+        parameters:
+          - name: enabled
+            value: "true"
+
+  # ─── raytone-landing:品牌官网/营销 SPA(raytone.ai + www.raytone.ai)───
+  # 北京环境当前承接官网/营销站,对外入口预留给 NLB + nginx-ingress。
+  raytone-landing:
+    enabled: true
+    namespace: raytone-prod-aliyun-beijing
+    project: raytone-prod-aliyun-beijing
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aliyun-beijing/raytone-landing
+      helm:
+        releaseName: raytone-landing
+        valueFiles: [values.yaml]
+
+  # ─── codesphere-ops 3 后端(NestJS,monorepo 拆 3 独立 image) ───
+  codesphere-ops-user-api:
+    enabled: true
+    namespace: raytone-prod-aliyun-beijing
+    project: raytone-prod-aliyun-beijing
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aliyun-beijing/codesphere-ops-user-api
+      helm:
+        releaseName: codesphere-ops-user-api
+        valueFiles: [values.yaml]
+
+  codesphere-ops-admin-api:
+    enabled: true
+    namespace: raytone-prod-aliyun-beijing
+    project: raytone-prod-aliyun-beijing
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aliyun-beijing/codesphere-ops-admin-api
+      helm:
+        releaseName: codesphere-ops-admin-api
+        valueFiles: [values.yaml]
+
+  codesphere-ops-billing-api:    # +Kafka 接 MSK(env wire 完成,默认禁,业务 ready 时 enable)
+    enabled: true
+    namespace: raytone-prod-aliyun-beijing
+    project: raytone-prod-aliyun-beijing
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aliyun-beijing/codesphere-ops-billing-api
+      helm:
+        releaseName: codesphere-ops-billing-api
+        valueFiles: [values.yaml]
+
+  codesphere-ops-billing-openapi:    # Partner OpenAPI 门面,端口 8087;envFrom 复用 billing-api config/redis
+    enabled: true
+    namespace: raytone-prod-aliyun-beijing
+    project: raytone-prod-aliyun-beijing
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aliyun-beijing/codesphere-ops-billing-openapi
+      helm:
+        releaseName: codesphere-ops-billing-openapi
+        valueFiles: [values.yaml]
+
+  # ─── codesphere-ops 3 前端(nginx 静态镜像) ───
+  codesphere-ops-user-web:       # console.raytone.ai
+    enabled: true
+    namespace: raytone-prod-aliyun-beijing
+    project: raytone-prod-aliyun-beijing
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aliyun-beijing/codesphere-ops-user-web
+      helm:
+        releaseName: codesphere-ops-user-web
+        valueFiles: [values.yaml]
+
+  codesphere-ops-admin-web:      # admin.raytone.ai
+    enabled: true
+    namespace: raytone-prod-aliyun-beijing
+    project: raytone-prod-aliyun-beijing
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aliyun-beijing/codesphere-ops-admin-web
+      helm:
+        releaseName: codesphere-ops-admin-web
+        valueFiles: [values.yaml]
+
+  # ─── 第三方 / 业务依赖 Helm chart(当前随 raytone 一起托管) ─────
+  # nats / searxng 仅 raytone 业务侧消费,不放部门通用 baseline。
+  # 入口位于 aws-eks-raytone-k8s/prod-aliyun-beijing/middleware/<name>。
+  nats:
+    namespace: nats
+    project: raytone-prod-aliyun-beijing
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aliyun-beijing/middleware/nats
+      helm:
+        releaseName: nats        # 对齐 system-apps 时期 helm install 的 release name,labels 一致避免 selector 冲突
+        valueFiles: [values.yaml]
+
+  searxng:
+    namespace: searxng
+    project: raytone-prod-aliyun-beijing
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aliyun-beijing/middleware/searxng
+      helm:
+        releaseName: searxng        # 对齐 system-apps 时期 helm install 的 release name,labels 一致避免 selector 冲突
+        valueFiles: [values.yaml]
+
+  # ─── observability(2026-07-31 新增)───
+  #  kube-prometheus-stack:指标+Grafana(全新);logging-stack:纳管既有手动部署的日志栈(Loki[OSS]+采集+告警)。
+  #  首轮 syncPolicy 只留 syncOptions(人工 sync、不 automated);验证无扰动后改 automated{selfHeal:true,prune:false}。
+  kube-prometheus-stack:
+    namespace: monitoring
+    project: raytone-prod-aliyun-beijing
+    additionalAnnotations:
+      argocd.argoproj.io/sync-wave: "-10"
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aliyun-beijing/observability/kube-prometheus-stack
+      helm:
+        releaseName: kube-prometheus-stack
+        valueFiles: [values.yaml]
+    syncPolicy:
+      automated:
+        selfHeal: true    # 漂移自动纠正
+        prune: false       # 关键:绝不自动删除(护住 chart 外的 token/OSS secret、既有资源)
+      syncOptions:
+        - CreateNamespace=true
+        - ServerSideApply=true
+    # alertmanager 改 StatefulSet(持久化 nflog/静默)后本 App 永久 OutOfSync:
+    # API server 会给 volumeClaimTemplates 补 git 里没有的字段 ——
+    # apiVersion/kind、spec.volumeMode=Filesystem,以及 **status.phase**。
+    # status 是状态字段、根本无法写进 git,所以补齐 volumeMode 也消不掉差异。
+    # (kubectl diff 看不到:它会先做服务端默认化再比;ArgoCD 是拿 git 原文比线上。)
+    # 不修的代价是永久 OutOfSync 会盖住以后真实的配置漂移,而这是告警链路本身。
+    # 本 App 的 syncPolicy 是自定义的、不含 RespectIgnoreDifferences ⇒
+    # 本项只影响 diff 判定,sync 仍按 git 写入(volumeClaimTemplates 建后不可改,
+    # SSA 重复应用同内容是 no-op)。
+    ignoreDifferences:
+      - group: apps
+        kind: StatefulSet
+        name: alertmanager
+        jsonPointers:
+          - /spec/volumeClaimTemplates
+
+  logging-stack:
+    namespace: logging
+    project: raytone-prod-aliyun-beijing
+    additionalAnnotations:
+      argocd.argoproj.io/sync-wave: "-20"
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aliyun-beijing/observability/logging-stack
+      helm:
+        releaseName: logging-operator
+        valueFiles: [values.yaml]
+    syncPolicy:
+      automated:
+        selfHeal: true    # 漂移自动纠正
+        prune: false       # 关键:绝不自动删除(护住 chart 外的 token/OSS secret、既有资源)
+      syncOptions:
+        - CreateNamespace=true
+        - ServerSideApply=true
+    # alertmanager 改 StatefulSet(持久化 nflog/静默)后本 App 永久 OutOfSync:
+    # API server 会给 volumeClaimTemplates 补 git 里没有的字段 ——
+    # apiVersion/kind、spec.volumeMode=Filesystem,以及 **status.phase**。
+    # status 是状态字段、根本无法写进 git,所以补齐 volumeMode 也消不掉差异。
+    # (kubectl diff 看不到:它会先做服务端默认化再比;ArgoCD 是拿 git 原文比线上。)
+    # 不修的代价是永久 OutOfSync 会盖住以后真实的配置漂移,而这是告警链路本身。
+    # 本 App 的 syncPolicy 是自定义的、不含 RespectIgnoreDifferences ⇒
+    # 本项只影响 diff 判定,sync 仍按 git 写入(volumeClaimTemplates 建后不可改,
+    # SSA 重复应用同内容是 no-op)。
+    ignoreDifferences:
+      - group: apps
+        kind: StatefulSet
+        name: alertmanager
+        jsonPointers:
+          - /spec/volumeClaimTemplates

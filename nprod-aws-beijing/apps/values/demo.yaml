@@ -1,0 +1,30 @@
+# demo 产品所有 child Application(从 aws-eks-demo-k8s 拉叶 manifest)
+# GitOps 链路探针;默认不部署,需要 demo 时把第一层 nprod-demo-appofapps.enabled=true
+spec:
+  destination:
+    server: https://kubernetes.default.svc
+
+cluster:
+  name: ""
+  domain: ""
+  env: ""
+
+applications:
+
+  nprod-demo-platform:
+    namespace: demo-nprod
+    project: demo-nprod
+    additionalAnnotations:
+      argocd.argoproj.io/sync-wave: "-100"
+    source:
+      repoURL: https://github.com/RaytoneLAB/aws-eks-demo-k8s
+      targetRevision: main
+      path: nprod/platform
+
+  nprod-demo-atom:
+    namespace: demo-nprod
+    project: demo-nprod
+    source:
+      repoURL: https://github.com/RaytoneLAB/aws-eks-demo-k8s
+      targetRevision: main
+      path: nprod/demo-atom

@@ -1,0 +1,410 @@
+# raytone 产品所有 child Application(从 aws-eks-raytone-k8s 拉叶 manifest)
+spec:
+  destination:
+    server: https://kubernetes.default.svc
+
+# 由第一层 root Application 经 helm parameters 注入(占位即可)
+cluster:
+  name: ""
+  domain: ""
+  env: ""
+
+applications:
+
+  # ─── platform:namespace / resourcequota / db-init Job(最早 sync) ───
+  codesphere-platform:
+    namespace: raytone-prod
+    project: raytone
+    additionalAnnotations:
+      argocd.argoproj.io/sync-wave: "-100"
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aws-use1/platform
+
+  # ─── gateway:Go LLM token 网关数据面(原 relitoken,2026-05-20 合并进 raytone-prod ns)───
+  # 业务代码:tokenplatform-gateway.git;ECR image: relitoken-gateway(Day 2 rename raytone-gateway)
+  gateway:
+    enabled: true    # 2026-06-25 cutover 上线
+    namespace: raytone-prod
+    project: raytone
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aws-use1/gateway
+      helm:
+        releaseName: gateway
+        valueFiles: [values.yaml]
+
+  # ─── publisher:Go Redis Pub/Sub writer(原 relitoken,2026-05-20 合并进 raytone-prod ns)───
+  # 业务代码:tokenplatform-publisher.git;ECR image: relitoken-publisher(Day 2 rename raytone-publisher)
+  publisher:
+    enabled: true    # 2026-06-25 cutover 上线
+    namespace: raytone-prod
+    project: raytone
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aws-use1/publisher
+      helm:
+        releaseName: publisher
+        valueFiles: [values.yaml]
+
+  # ─── tokenplatform-rawbody-consumer:Kafka gw.raw_body → PG raw_body_events ingest ───
+  # 业务代码:tokenplatform-rawbody-consumer.git;消费 MSK gw.raw_body topic,
+  # 写入专属库 tokenplatform_rawbody(2026-05-27 建)
+  tokenplatform-rawbody-consumer:
+    enabled: true    # 2026-08-06 恢复上线;生产端总闸见 gateway raw_body_event_enabled
+    namespace: raytone-prod
+    project: raytone
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aws-use1/tokenplatform-rawbody-consumer
+      helm:
+        releaseName: tokenplatform-rawbody-consumer
+        valueFiles: [values.yaml]
+
+  # ─── codesphere-saas:Python 后端 / SaaS BFF(沙箱编排 + billing/payment 代理) ───
+  codesphere-saas:
+    enabled: false   # 2026-09-10 下线(decommission),全线最后一个实例;改回 true 可重建。EFS PV Retain,数据不丢
+    namespace: raytone-prod
+    project: raytone
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aws-use1/codesphere-saas
+      helm:
+        releaseName: codesphere-saas
+        valueFiles: [values.yaml]
+
+  # ─── Raytone Studio 新链路 + 智能体广场(三件套)────────────────────────────
+  #
+  # ★★★ 三个 App 现在全是 enabled: false —— 前置未齐。改 true 之前逐条打勾:
+  #   □ IRSA:新建 role raytonelab-prod-use1-raytone-studio-api-irsa
+  #          (信任 sub=system:serviceaccount:raytone-prod:raytone-studio-api,
+  #           权限限 arn:aws:s3:::raytone-prod-myfiles-use1[/*] 的 S3 读写),
+  #          再把 raytone-studio-api/templates/serviceaccount.yaml 的 role-arn 占位换掉。
+  #          ⚠️ 不换:pod 能起、探针全绿,只在真正读写 S3 时 AccessDenied(静默)。
+  #          ★ 不要复用 codesphere-saas 那个 SA —— 实测它注解的 role/codesphere-saas
+  #            在账号里不存在(NoSuchEntity),且两个 App 会抢同一对象。
+  #   □ 库:Aurora raytone-prod-db-use1 上建 codesphere_public_saas_v2 与 plaza_v2
+  #        及属主角色(本环境库名带 _v2)。★ CREATE DATABASE 后必须
+  #        ALTER SCHEMA public OWNER TO <属主> + GRANT USAGE TO readonly_viewer,
+  #        否则 alembic 建表报 permission denied for schema public(国内 prod 实测踩过)。
+  #   □ Secret:三套 app-secret 里的 REPLACE-WITH-DB-PASSWORD / REPLACE-WITH-REDIS-PASSWORD
+  #            换成真值;raytone-studio-plaza 用
+  #            aws-eks-raytone-k8s/scripts/provision-studio-plaza-secret.py 创建
+  #            (★ 它会先读 skill-plaza-secret 与 raytone-studio-api-secret 做环境校验,
+  #             所以只能在 chart 同步**之后**跑;期间两个 Deployment 必有一段
+  #             CreateContainerConfigError,属预期且自愈,别当故障回滚)。
+  #   □ ECR:建 raytone-studio-api / raytone-studio-web / raytone-skill-plaza 三个 repo
+  #   □ 镜像:三个 values.yaml 的 tag 还是 REPLACE-AFTER-FIRST-USE1-BUILD 占位。
+  #          build-box 01 无 --deploy,tag 要**手改** values.yaml 再 push。
+  #   □ 前端:raytone-studio-frontend 仓新增 .env.public-saas-overseas,构建带
+  #          BUILD_MODE=public-saas-overseas。抄 hk 那份会把海外生产用户导到
+  #          platform.codesphere.run,而页面完全正常、控制台无报错。
+  #   □ Broker:codesphere-ops-user-api-config 的 SAAS_SSO_* 五键已在仓里,
+  #            同步后必须 rollout restart(该 Deployment 无 checksum/config 注解)。
+  #            ★ 验收判据是 discovery 的 issuer 非空,不是「返 200」——
+  #              该路由无条件注册,未生效时也返 200 但 issuer 为空串。
+  #
+  # ★★ 启用顺序必须 skill-plaza → raytone-studio-api → raytone-studio-web:
+  #    web 的 nginx 是字面量 upstream(proxy_pass http://raytone-studio-api; 与
+  #    http://skill-plaza/avatars/),启动期解析一次,上游 Service 不存在就 emerg 退出。
+  #    三者是独立 Application,跨 App 没有 sync-wave 顺序保证。
+  #
+  # ★ 入口:走 Ingress(external-nginx)+ Cloudflare 通配 DNS/证书(*.raytone.ai),
+  #   **零带外改动** —— 不像国内 prod 要动 tcp-services / LB 端口 / 223 OpenResty。
+  #   studio.raytone.ai 原属 codesphere-frontend-saas,其 ingress.yaml 已整体注释以让位。
+  #   ⚠️ *.raytone.ai 全部经 raytone-geoblock 的 Cloudflare Worker(CN 访客 451),
+  #     新子域自动被它覆盖 —— 上线后要用海外出口实测,别用国内网络判断。
+  skill-plaza:
+    enabled: true    # 2026-09-08 上线(启用顺序三步之首:plaza → api → web)
+    namespace: raytone-prod
+    project: raytone
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aws-use1/skill-plaza
+      helm:
+        releaseName: skill-plaza
+        valueFiles: [values.yaml]
+        parameters:
+          - name: enabled
+            value: "true"
+
+  raytone-studio-api:
+    enabled: true    # 2026-09-08 上线(三步之二;pod 等 provision-studio-plaza-secret 后自愈)
+    # ★ 本服务无 HPA / KEDA ScaledObject(2026-09-09 实测两者皆空),replicas 的权威是 git。
+    #   不设此项 ⇒ 默认的 ignoreDifferences(/spec/replicas)+ RespectIgnoreDifferences=true
+    #   会让 sync 永不写副本数:改 values.yaml 无效且 ArgoCD 仍 Synced(eb49a0cc 踩过)。
+    gitOwnsReplicas: true
+    namespace: raytone-prod
+    project: raytone
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aws-use1/raytone-studio-api
+      helm:
+        releaseName: raytone-studio-api
+        valueFiles: [values.yaml]
+        parameters:
+          - name: enabled
+            value: "true"
+
+  raytone-studio-web:
+    enabled: true    # 2026-09-08 上线(三步之三;上游 api/plaza Service 已就绪)
+    namespace: raytone-prod
+    project: raytone
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aws-use1/raytone-studio-web
+      helm:
+        releaseName: raytone-studio-web
+        valueFiles: [values.yaml]
+        parameters:
+          - name: enabled
+            value: "true"
+
+  # ─── raytone-landing:品牌官网/营销 SPA(raytone.ai + www.raytone.ai)───
+  # 取代 Cloudflare Pages 旧部署 — DNS 切完后 Pages Custom domains 可 disconnect
+  raytone-landing:
+    enabled: true    # 2026-06-25 cutover 上线
+    namespace: raytone-prod
+    project: raytone
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aws-use1/raytone-landing
+      helm:
+        releaseName: raytone-landing
+        valueFiles: [values.yaml]
+
+  # ─── codesphere-ops 3 后端(NestJS,monorepo 拆 3 独立 image) ───
+  codesphere-ops-user-api:
+    enabled: true    # 2026-06-25 cutover 上线
+    namespace: raytone-prod
+    project: raytone
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aws-use1/codesphere-ops-user-api
+      helm:
+        releaseName: codesphere-ops-user-api
+        valueFiles: [values.yaml]
+
+  codesphere-ops-admin-api:
+    enabled: true    # 2026-06-25 cutover 上线
+    namespace: raytone-prod
+    project: raytone
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aws-use1/codesphere-ops-admin-api
+      helm:
+        releaseName: codesphere-ops-admin-api
+        valueFiles: [values.yaml]
+
+  codesphere-ops-billing-api:    # +Kafka 接 MSK(env wire 完成,默认禁,业务 ready 时 enable)
+    enabled: true    # 2026-06-25 cutover 上线
+    namespace: raytone-prod
+    project: raytone
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aws-use1/codesphere-ops-billing-api
+      helm:
+        releaseName: codesphere-ops-billing-api
+        valueFiles: [values.yaml]
+    # Ledger V2 窗口已于 2026-08-09 完成:库 V2_CONTRACT、15 strict trigger、
+    # 87/93 账户 RECONCILED_V2(余 6 个 TOKEN_USAGE 账户按设计 fail closed,待 V10)、
+    # open repair run/account=0、镜像固化为 prod-1720a51-20260809-0556、
+    # worker flag 已按 worker-flags.before.jsonl 逐项还原,故恢复 auto-sync 原值。
+    # migrate Job 已改为显式 opt-in(migrate.enabled 默认 false),自动同步不会再触发迁移。
+    #
+    # 2026-09-02:此处曾显式写 syncPolicy(automated prune+selfHeal / CreateNamespace),
+    # 内容与 applications.yaml 的 else 分支默认值逐字相同,但因为模板是
+    # {{- with $appData.syncPolicy }}...{{- else }}默认{{- end }},显式定义会走 with 分支,
+    # 于是拿不到默认分支新加的 RespectIgnoreDifferences=true —— 缺它时 sync 会按 chart 值
+    # 写回 /spec/replicas,把 KEDA 扩出的副本压回 2(billing-api 正是受害者)。
+    # 故删除本处自定义、回落到默认分支,今后默认值变更自动生效。
+    # 若将来真要覆盖,记得把默认分支的全部 syncOptions 一并抄过来。
+
+  # ─── codesphere-ops-billing-openapi:Partner OpenAPI 门面(billing 同源 Dockerfile.openapi,:3030)───
+  codesphere-ops-billing-openapi:
+    enabled: true    # 2026-06-25 cutover 上线
+    namespace: raytone-prod
+    project: raytone
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aws-use1/codesphere-ops-billing-openapi
+      helm:
+        releaseName: codesphere-ops-billing-openapi
+        valueFiles: [values.yaml]
+    # Ledger V2 窗口已于 2026-08-09 完成:库 V2_CONTRACT、15 strict trigger、
+    # 87/93 账户 RECONCILED_V2(余 6 个 TOKEN_USAGE 账户按设计 fail closed,待 V10)、
+    # open repair run/account=0、镜像固化为 prod-1720a51-20260809-0556、
+    # worker flag 已按 worker-flags.before.jsonl 逐项还原,故恢复 auto-sync 原值。
+    # migrate Job 已改为显式 opt-in(migrate.enabled 默认 false),自动同步不会再触发迁移。
+    #
+    # 2026-09-02:此处曾显式写 syncPolicy(automated prune+selfHeal / CreateNamespace),
+    # 内容与 applications.yaml 的 else 分支默认值逐字相同,但因为模板是
+    # {{- with $appData.syncPolicy }}...{{- else }}默认{{- end }},显式定义会走 with 分支,
+    # 于是拿不到默认分支新加的 RespectIgnoreDifferences=true —— 缺它时 sync 会按 chart 值
+    # 写回 /spec/replicas,把 KEDA 扩出的副本压回 2(billing-api 正是受害者)。
+    # 故删除本处自定义、回落到默认分支,今后默认值变更自动生效。
+    # 若将来真要覆盖,记得把默认分支的全部 syncOptions 一并抄过来。
+
+  # ─── codesphere-ops 3 前端(nginx 静态镜像) ───
+  codesphere-ops-user-web:       # console.raytone.ai
+    enabled: true    # 2026-06-25 cutover 上线
+    namespace: raytone-prod
+    project: raytone
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aws-use1/codesphere-ops-user-web
+      helm:
+        releaseName: codesphere-ops-user-web
+        valueFiles: [values.yaml]
+
+  codesphere-ops-admin-web:      # admin.raytone.ai
+    enabled: true    # 2026-06-25 cutover 上线
+    namespace: raytone-prod
+    project: raytone
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aws-use1/codesphere-ops-admin-web
+      helm:
+        releaseName: codesphere-ops-admin-web
+        valueFiles: [values.yaml]
+
+  # ─── 第三方 / 业务依赖 Helm chart(原 system-apps,raytone 专属故归此处)─────
+  # nats / searxng 仅 raytone 业务侧消费,部门 baseline 不含;
+  # chart 位于 aws-eks-raytone-k8s/helm/<name>。
+  nats:
+    namespace: nats
+    project: raytone
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aws-use1/middleware/nats
+      helm:
+        releaseName: nats        # 对齐 system-apps 时期 helm install 的 release name,labels 一致避免 selector 冲突
+        valueFiles: [values.yaml]
+
+  searxng:
+    namespace: searxng
+    project: raytone
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aws-use1/middleware/searxng
+      helm:
+        releaseName: searxng        # 对齐 system-apps 时期 helm install 的 release name,labels 一致避免 selector 冲突
+        valueFiles: [values.yaml]
+
+  # ─── Bifrost LLM 网关(上游 maximhq/bifrost v2.0.0,第三方镜像转推 use1 ECR)───
+  # 机制与坑(静默退 SQLite / setup token / pricing datasheet 外网依赖)见
+  # aws-eks-raytone-k8s/docs/2026-09-03-bifrost-nprod-integration.md。
+  # ★ 开启前必须先就位两件事,否则 pod 起不来或 dashboard 无法初始化:
+  #   ① ECR raytone-bifrost:v2.0.0(转推,与 nprod cn ECR 同一上游 amd64 层集)
+  #   ② Aurora 库 bifrost_v2 + 角色 bifrost_user(PG 16:CREATE DATABASE ... OWNER bifrost_user
+  #      在 RDS master 下被拒 must be able to SET ROLE;实做=建库不带 OWNER,
+  #      再 ALTER SCHEMA public OWNER TO bifrost_user —— public schema 非属主不可写,
+  #      不移交 GORM migration 建不了表)
+  # ns bifrost 由默认 syncPolicy 的 CreateNamespace=true 建;Secret bifrost-secret 随 chart 下发。
+  # 对外暴露走 L7 Ingress(chart 里 ingress.enabled,默认关:先建管理员+开鉴权再翻,同 nprod 教训)。
+  bifrost:
+    enabled: true
+    namespace: bifrost
+    project: raytone
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aws-use1/middleware/bifrost
+      helm:
+        releaseName: bifrost
+        valueFiles: [values.yaml]
+        parameters:
+          - name: enabled
+            value: "true"
+
+  # ─── 集群可观测性:Prometheus / Grafana(自托管,与 CloudWatch 并存)───
+  kube-prometheus-stack:
+    namespace: monitoring
+    project: raytone
+    additionalAnnotations:
+      argocd.argoproj.io/sync-wave: "-10"
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aws-use1/observability/kube-prometheus-stack
+      helm:
+        releaseName: kube-prometheus-stack
+        valueFiles: [values.yaml]
+    # 首次由 Argo CD 接管,prune=false 更安全;稳定后再开 prune。
+    syncPolicy:
+      automated:
+        selfHeal: true
+        prune: false
+      syncOptions:
+        - CreateNamespace=true
+        - ServerSideApply=true
+
+  # ─── 集群日志/告警栈:Loki(S3) + Alertmanager + webhook-dingtalk(纳管既有手动部署的栈)───
+  logging-stack:
+    namespace: logging
+    project: raytone
+    additionalAnnotations:
+      argocd.argoproj.io/sync-wave: "-20"
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aws-use1/observability/logging-stack
+      helm:
+        releaseName: logging-operator
+        valueFiles: [values.yaml]
+        # CRD 由 logging-operator 依赖初装(且体量大,客户端 apply 会超 256KB 注解限制),
+        # 交由 operator 自身管理,ArgoCD 不重复 apply。
+        skipCrds: true
+    # 已完成首轮人工 sync + diff review(仅 loki 滚动一次、alertmanager-config 仅多注释、token CM 不纳管),
+    # 确认无扰动后开启 automated。prune:false 确保 webhook-dingtalk-config(真 token)永不被删。
+    syncPolicy:
+      automated:
+        selfHeal: true
+        prune: false
+      syncOptions:
+        - CreateNamespace=true
+        - ServerSideApply=true
+
+  # ─── 集群安全 addon:kubelet-serving CSR 自动审批器(postfinance/kubelet-csr-approver)───
+  # 根因:EKS 只自动批 kubelet client CSR、不批 serving CSR;无审批器时 serving 证书到期不续
+  # → metrics-server(校验该证书)抓不到节点 → 依赖的生产 HPA 失准。审批器让 serving 证书恢复自动轮换。
+  # chart 位于 aws-eks-raytone-k8s/prod-aws-use1/cluster/kubelet-csr-approver(wrap 官方 chart 1.2.14)。
+  kubelet-csr-approver:
+    namespace: kube-system
+    project: raytone
+    additionalAnnotations:
+      argocd.argoproj.io/sync-wave: "-30"
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: prod-aws-use1/cluster/kubelet-csr-approver
+      helm:
+        releaseName: kubelet-csr-approver
+        valueFiles: [values.yaml]
+    # 已完成首次人工 sync + 全链验证(审批器 Healthy、护栏实测正确、impersonate CSR 走通
+    # approver→EKS signer 签发),转为 automated 由 ArgoCD 维持期望状态。
+    # prune:false 保守:不自动删审批器 RBAC/Deployment,避免误剪断审批链路。
+    syncPolicy:
+      automated:
+        selfHeal: true
+        prune: false
+      syncOptions:
+        - CreateNamespace=true
+        - ServerSideApply=true

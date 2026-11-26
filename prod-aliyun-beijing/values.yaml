@@ -1,0 +1,58 @@
+spec:
+  destination:
+    server: https://kubernetes.default.svc
+  # 当前环境名;root-app 渲染北京环境时显式传入该 values 文件。
+  env: prod-aliyun-beijing
+
+# Cluster 上下文由 root-app 通过 `helm --set` 注入。
+# 第一层模板把这些值透传给第二层 chart,第二层再继续传给各业务叶 chart。
+cluster:
+  name: ""          # e.g. raytone-prod-aliyun-bj-ack
+  domain: ""        # e.g. raytone.ai
+
+# ─── 业务 root Application 集中声明 ─────────────────────────────────
+# 每条 entry → templates/applications.yaml range 渲染出一个 ArgoCD Application
+# Application 指向**本仓** `./prod-aliyun-beijing/apps` 第二层 chart,再通过 valueFiles 选择产品。
+# 第二层 chart 再渲染该产品的 child Application,每个 child Application 指向对应 k8s 仓的叶 manifest。
+# 现在北京环境只保留 raytone;如需扩展产品线,再补对应 values 文件和 entry。
+applications:
+
+  prod-aliyun-beijing-raytone-appofapps:
+    enabled: true                  # 当前北京环境统一由 raytone app-of-apps 承载业务子应用。
+    namespace: raytone-prod-aliyun-beijing
+    # 不单独指定 cluster.server,默认落到当前 ACK 集群。
+    # region 固定为 cn-beijing,供第二层和叶 chart 继续透传。
+    cluster:
+      region: cn-beijing
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-workload-apps.git
+      targetRevision: main
+      path: ./prod-aliyun-beijing/apps
+      helm:
+        valueFiles:
+          - values/raytone.yaml
+
+# ─── ArgoCD AppProject 集中声明 ─────────────────────────────────────
+# 每条 entry → templates/projects.yaml range 渲染出一个 AppProject
+# 二层 child Application 在各产品 chart 中通过 `spec.project` 引用这里定义的 AppProject。
+# 当前北京环境只保留 raytone 一个项目。
+# AppProject 走宽松 sourceRepos/destinations/clusterResourceWhitelist(* 通配)
+# 隔离主要靠:Argo RBAC roles + sub2api IAM + IRSA + NetworkPolicy
+projects:
+
+  raytone-prod-aliyun-beijing:
+    description: "raytone Applications for prod environment"
+    sourceRepos:
+      - '*'
+    destinations:
+      - { namespace: '*', server: '*' }
+    clusterResourceWhitelist:
+      - { group: '*', kind: '*' }
+    namespaceResourceWhitelist:
+      - { group: '*', kind: '*' }
+    roles:
+      - name: readonly
+        policies:
+          - p, proj:raytone-prod-aliyun-beijing:readonly, applications, get, raytone-prod-aliyun-beijing/*, allow
+          - p, proj:raytone-prod-aliyun-beijing:readonly, applications, sync, raytone-prod-aliyun-beijing/*, deny
+

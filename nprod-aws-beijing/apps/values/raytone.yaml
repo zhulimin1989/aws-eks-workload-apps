@@ -1,0 +1,328 @@
+# raytone 产品所有 child Application(从 aws-eks-raytone-k8s 拉叶 manifest)
+spec:
+  destination:
+    server: https://kubernetes.default.svc
+
+# 由第一层 root Application 经 helm parameters 注入(占位即可)
+cluster:
+  name: ""
+  domain: ""
+  env: ""
+  server: https://kubernetes.default.svc
+  region: cn-north-1
+  awsPartition: aws-cn
+  awsDnsSuffix: amazonaws.com.cn
+
+applications:
+
+  # Safety gate for Beijing nprod: keep workloads disabled until their cn-north-1
+  # ECR images, China-region dependencies, domains, and re-sealed secrets are ready.
+
+  # ─── platform:namespace / resourcequota / db-init Job(最早 sync) ───
+  codesphere-platform:
+    enabled: true
+    namespace: raytone-nprod
+    project: raytone-nprod
+    additionalAnnotations:
+      argocd.argoproj.io/sync-wave: "-100"
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: nprod-aws-beijing/platform
+
+
+  # ─── tokenplatform 数据面(对齐 prod；默认关闭，待 China ECR image/DB/MSK 就绪后启用) ───
+  gateway:
+    enabled: true
+    namespace: raytone-nprod
+    project: raytone-nprod
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: nprod-aws-beijing/gateway
+      helm:
+        releaseName: gateway
+        valueFiles: [values.yaml]
+
+  publisher:
+    enabled: true
+    namespace: raytone-nprod
+    project: raytone-nprod
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: nprod-aws-beijing/publisher
+      helm:
+        releaseName: publisher
+        valueFiles: [values.yaml]
+
+  tokenplatform-rawbody-consumer:
+    enabled: true    # 2026-08-07 恢复上线(仅 consumer);gateway raw_body 生产端保持关闭
+    namespace: raytone-nprod
+    project: raytone-nprod
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: nprod-aws-beijing/tokenplatform-rawbody-consumer
+      helm:
+        releaseName: tokenplatform-rawbody-consumer
+        valueFiles: [values.yaml]
+
+  # ─── Raytone Studio 新链路(raytone-studio-api 后端 + raytone-studio-web 前端):public-saas-test ───
+  # 开启顺序必须先后端再前端:前端 nginx 是字面量 upstream(proxy_pass http://raytone-studio-api;)，
+  # 无 resolver/变量，后端 Service 不存在时前端 pod 起不来；两者是独立 Application，没有跨 app 顺序保证。
+  raytone-studio-api:
+    enabled: true
+    namespace: raytone-nprod
+    project: raytone-nprod
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: nprod-aws-beijing/raytone-studio-api
+      helm:
+        releaseName: raytone-studio-api
+        valueFiles: [values.yaml]
+        parameters:
+          - name: enabled
+            value: "true"
+
+  raytone-studio-web:
+    enabled: true
+    namespace: raytone-nprod
+    project: raytone-nprod
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: nprod-aws-beijing/raytone-studio-web
+      helm:
+        releaseName: raytone-studio-web
+        valueFiles: [values.yaml]
+        parameters:
+          - name: enabled
+            value: "true"
+
+  # ─── RDWORK 后端(rdwork-backend 一仓两入口:主面 + 模型转发面 /gw/v1)───
+  # 默认关闭。开启前置见 aws-eks-raytone-k8s/docs/2026-08-28-rdwork-backend-nprod-integration.md:
+  #   库 rdwork_cloud_v2 已建；Secret rdwork-api-secret 仅有 DATABASE_URL,SaaS 段凭据待补;
+  #   两个依赖(老 Python 后端 :30082、AgentMatrix)从 nprod 实测不可达,需先定方案。
+  # ★ 开启顺序必须先 api 再 gateway:转发面复用 rdwork-api-config 这个 ConfigMap,
+  #   而两者是独立 Application,跨 Application 没有 sync-wave 顺序保证。
+  rdwork-api:
+    enabled: true
+    namespace: raytone-nprod
+    project: raytone-nprod
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: nprod-aws-beijing/rdwork-api
+      helm:
+        releaseName: rdwork-api
+        valueFiles: [values.yaml]
+        parameters:
+          - name: enabled
+            value: "true"
+
+  rdwork-gateway:
+    enabled: true
+    namespace: raytone-nprod
+    project: raytone-nprod
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: nprod-aws-beijing/rdwork-gateway
+      helm:
+        releaseName: rdwork-gateway
+        valueFiles: [values.yaml]
+        parameters:
+          - name: enabled
+            value: "true"
+
+  # ─── 智能体广场 SkillPlaza(skill-plaza-standalone,单进程全包)───
+  # 默认关闭。前置见 aws-eks-raytone-k8s/docs/2026-08-31-skill-plaza-nprod-integration.md。
+  # ★ 有状态:PVC(RWO)承载 data/uploads(UGC 上架的技能包,不可再生),因此单副本 + Recreate。
+  # ★ 首次开启后需一次性开窗跑 seed(chart values 里的 seed.enabled),跑完立刻改回 false —
+  #   seed 会 DELETE 内容表,重复执行即清库。
+  skill-plaza:
+    enabled: true
+    namespace: raytone-nprod
+    project: raytone-nprod
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: nprod-aws-beijing/skill-plaza
+      helm:
+        releaseName: skill-plaza
+        valueFiles: [values.yaml]
+        parameters:
+          - name: enabled
+            value: "true"
+
+  # ─── raytone-landing:品牌官网/营销 SPA(raytone.ai + www.raytone.ai)───
+  # 取代 Cloudflare Pages 旧部署 — DNS 切完后 Pages Custom domains 可 disconnect
+  raytone-landing:
+    enabled: true
+    namespace: raytone-nprod
+    project: raytone-nprod
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: nprod-aws-beijing/raytone-landing
+      helm:
+        releaseName: raytone-landing
+        valueFiles: [values.yaml]
+
+  # ─── codesphere-ops 3 后端(NestJS,monorepo 拆 3 独立 image) ───
+  codesphere-ops-user-api:
+    enabled: true
+    namespace: raytone-nprod
+    project: raytone-nprod
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: nprod-aws-beijing/codesphere-ops-user-api
+      helm:
+        releaseName: codesphere-ops-user-api
+        valueFiles: [values.yaml]
+
+  codesphere-ops-admin-api:
+    enabled: true
+    namespace: raytone-nprod
+    project: raytone-nprod
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: nprod-aws-beijing/codesphere-ops-admin-api
+      helm:
+        releaseName: codesphere-ops-admin-api
+        valueFiles: [values.yaml]
+
+  codesphere-ops-billing-api:    # +Kafka 接 MSK(env wire 完成,默认禁,业务 ready 时 enable)
+    enabled: true
+    namespace: raytone-nprod
+    project: raytone-nprod
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: nprod-aws-beijing/codesphere-ops-billing-api
+      helm:
+        releaseName: codesphere-ops-billing-api
+        valueFiles: [values.yaml]
+
+  # ─── codesphere-finance:Spring Boot 财务 API（首次 test 暗部署，不切 Admin 路由）───
+  # 双库/JWT/Redis 复用 Admin/Billing 的既有 Secret key；导出 Worker 固定为 false + LEGACY。
+  codesphere-finance:
+    enabled: true
+    namespace: raytone-nprod
+    project: raytone-nprod
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: nprod-aws-beijing/codesphere-finance
+      helm:
+        releaseName: codesphere-finance
+        valueFiles: [values.yaml]
+
+  # ─── codesphere-alerting:Nightingale center（首次 nprod 暗部署，ClusterIP，不切外部路由）───
+  # 数据库 ruidong_alerting 已在 RDS 上；连接串在集群 Secret codesphere-alerting-secret，不进 Git。
+  codesphere-alerting:
+    enabled: true
+    namespace: raytone-nprod
+    project: raytone-nprod
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: nprod-aws-beijing/codesphere-alerting
+      helm:
+        releaseName: codesphere-alerting
+        valueFiles: [values.yaml]
+
+  # ─── codesphere-ops-billing-openapi:对外 Partner OpenAPI 门面(独立 Deployment) ───
+  # 与 billing 同库(ruidong_billing)、复用其 ConfigMap/Redis Secret;core billing(3010)保持私网。
+  # 北京无公网 Ingress(ICP):本服务只起 ClusterIP,公网入口方式待定。
+  codesphere-ops-billing-openapi:
+    enabled: true
+    namespace: raytone-nprod
+    project: raytone-nprod
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: nprod-aws-beijing/codesphere-ops-billing-openapi
+      helm:
+        releaseName: codesphere-ops-billing-openapi
+        valueFiles: [values.yaml]
+
+  # ─── codesphere-ops 3 前端(nginx 静态镜像) ───
+  codesphere-ops-user-web:       # console.raytone.ai
+    enabled: true
+    namespace: raytone-nprod
+    project: raytone-nprod
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: nprod-aws-beijing/codesphere-ops-user-web
+      helm:
+        releaseName: codesphere-ops-user-web
+        valueFiles: [values.yaml]
+
+  codesphere-ops-admin-web:      # admin.raytone.ai
+    enabled: true
+    namespace: raytone-nprod
+    project: raytone-nprod
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: nprod-aws-beijing/codesphere-ops-admin-web
+      helm:
+        releaseName: codesphere-ops-admin-web
+        valueFiles: [values.yaml]
+
+  # ─── 第三方 / 业务依赖 Helm chart(原 system-apps,raytone 专属故归此处)─────
+  # nats / cliproxy / searxng / sub2api 仅 raytone 业务侧消费,部门 baseline 不含;
+  # chart 位于 aws-eks-raytone-k8s/helm/<name>。
+  nats:
+    enabled: true
+    namespace: nats
+    project: raytone-nprod
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: nprod-aws-beijing/middleware/nats
+      helm:
+        releaseName: nats        # 对齐 system-apps 时期 helm install 的 release name,labels 一致避免 selector 冲突
+        valueFiles: [values.yaml]
+
+  searxng:
+    enabled: true
+    namespace: searxng
+    project: raytone-nprod
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: nprod-aws-beijing/middleware/searxng
+      helm:
+        releaseName: searxng        # 对齐 system-apps 时期 helm install 的 release name,labels 一致避免 selector 冲突
+        valueFiles: [values.yaml]
+
+  # ─── Bifrost LLM 网关(上游 maximhq/bifrost v2.0.0,第三方镜像转推 cn ECR)───
+  # 前置与判据见 aws-eks-raytone-k8s/docs/2026-09-03-bifrost-nprod-integration.md。
+  # ★ 开启前必须先就位两件事,否则 pod 起不来或 dashboard 无法初始化:
+  #   ① RDS 库 bifrost_v2 + 属主角色 bifrost_user(手工建,同 plaza_v2 先例;db-init Job 已停用)
+  #   ② ns bifrost 里的 Secret bifrost-secret:PG_PASSWORD / BIFROST_ENCRYPTION_KEY /
+  #      BIFROST_SETUP_TOKEN(★ setup token 不会自动生成,缺它则「创建第一个管理员」被拒)
+  # ★ 只起 ClusterIP,不开公网端口(tcp-services 里 8092 预留未接线)。
+  # 两条前置于 2026-09-03 已就位:bifrost_v2/bifrost_user 建好(一次性 Job,跑完已删),
+  # Secret bifrost/bifrost-secret 三个 key 已建。
+  bifrost:
+    enabled: true
+    namespace: bifrost
+    project: raytone-nprod
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: nprod-aws-beijing/middleware/bifrost
+      helm:
+        releaseName: bifrost
+        valueFiles: [values.yaml]
+        parameters:
+          - name: enabled
+            value: "true"

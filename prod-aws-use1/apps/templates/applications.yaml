@@ -1,0 +1,111 @@
+# 第二层 child Application — range 渲染
+# 每条 values.applications.<name> → 一个 Application 指向产品 k8s 仓的叶 manifest 目录
+# cluster.name / cluster.domain / cluster.env 由第一层经 helm parameters 注入,本层透传给叶 chart(如有)
+{{- range $appName, $appData := .Values.applications }}
+{{- if or (not (hasKey $appData "enabled")) $appData.enabled }}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{ $appName }}
+  namespace: argocd
+  {{- with $appData.additionalAnnotations }}
+  annotations:
+    {{- range $key, $value := . }}
+    {{ $key }}: {{ $value | quote }}
+    {{- end }}
+  {{- end }}
+  {{- with $appData.additionalLabels }}
+  labels:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: {{ $appData.project }}
+  destination:
+    # 跨 region 场景:第一层 root app 经 helm.parameters 注入 cluster.server,
+    # 二层在这里渲染 child Application 的目标 cluster(use1 children 落 use1 cluster)
+    server: {{ $.Values.cluster.server | default $.Values.spec.destination.server }}
+    namespace: {{ $appData.namespace }}
+  source:
+    repoURL: {{ $appData.source.repoURL | quote }}
+    targetRevision: {{ $appData.source.targetRevision }}
+    path: {{ $appData.source.path }}
+    {{- if $appData.source.helm }}
+    helm:
+      {{- with $appData.source.helm.releaseName }}
+      releaseName: {{ . | quote }}
+      {{- end }}
+      {{- with $appData.source.helm.valueFiles }}
+      valueFiles:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # 透传 cluster 上下文(给业务叶 chart 用)
+      parameters:
+        {{- with $appData.source.helm.parameters }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        - name: cluster.name
+          value: {{ $.Values.cluster.name | quote }}
+        - name: cluster.domain
+          value: {{ $.Values.cluster.domain | quote }}
+        - name: cluster.env
+          value: {{ $.Values.cluster.env | quote }}
+        # 叶 chart 用 region 渲染 ECR image domain(sg=ap-southeast-1 / use1=us-east-1)
+        - name: region
+          value: {{ $.Values.cluster.region | default "us-east-1" | quote }}
+    {{- else }}
+    directory:
+      recurse: true
+    {{- end }}
+  {{- with $appData.syncPolicy }}
+  syncPolicy:
+    {{- toYaml . | nindent 4 }}
+  {{- else }}
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: true
+    syncOptions:
+      - CreateNamespace=true
+      # 下面的 ignoreDifferences 只作用于 **diff 判定**;缺这一项时 sync 仍会按
+      # chart 值写回 /spec/replicas,把 HPA/KEDA 扩出的副本压回 chart 的 2。
+      # 国内 prod 2026-08-26 实际发生过:同步 billing-api 的 ConfigMap 把副本从 12 压到 4。
+      # 只加在本 else 分支:自定义 syncPolicy 的两个可观测性栈无 HPA,
+      # 对它们而言 git 才是 replicas 的权威,加上反而让手工缩放不再被纠正。
+      - RespectIgnoreDifferences=true
+  {{- end }}
+  # 默认 ignore Deployment / StatefulSet 的 spec.replicas drift —
+  # HPA 是 replicas 的 source of truth(git 写多少都会被 HPA 推回 minReplicas)
+  # 各 Application 如果有额外 ignoreDifferences,在 values 里 append 即可(本段是默认 base)
+  #
+  # ★★ 无 HPA/KEDA 的服务要设 gitOwnsReplicas: true —— 否则本段 + 上面的
+  #    RespectIgnoreDifferences=true 会让 sync **永不写 /spec/replicas**:
+  #    改 values.yaml 的 replicas 完全无效,而 ArgoCD 仍显示 Synced(无任何提示)。
+  #    2026-09-09 实际发生:raytone-studio-api 的「降为单副本止血」(k8s 仓 eb49a0cc)
+  #    推了 git 却一直是 2 副本,最后只能 kubectl scale 带外补。
+  #    ⚠️ 有 HPA/KEDA 的服务**绝不能**设 true —— 会把扩出的副本按 chart 值压回
+  #    (国内 prod 2026-08-26 billing-api 12→4 的原因)。
+  {{- if or (not $appData.gitOwnsReplicas) $appData.ignoreDifferences }}
+  ignoreDifferences:
+    {{- if not $appData.gitOwnsReplicas }}
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
+    - group: apps
+      kind: StatefulSet
+      jsonPointers:
+        - /spec/replicas
+    {{- end }}
+    {{- with $appData.ignoreDifferences }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- end }}
+  {{- with $appData.info }}
+  info:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
+{{- end }}

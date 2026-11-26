@@ -1,0 +1,81 @@
+spec:
+  destination:
+    server: https://kubernetes.default.svc
+  # 当前 env 名 — 由 ArgoCD root-app 渲染时通过 -f values.yaml 覆盖
+  env: uat-aws-hongkong
+
+# Cluster 上下文 — HK nprod 独立集群(ap-east-1,标准 aws partition)
+# 与 cn nprod(aws-cn / cn-north-1 / 无域名走 IP:port)、prod(us-east-1 / raytone.ai)三套互不相干
+cluster:
+  name: raytonelab-uat-aws-hongkong
+  domain: codesphere.run          # Cloudflare 托管;HK 直接用 codesphere.run 子域(cn 无域名故不冲突)。改这里即可换域
+  region: ap-east-1
+  awsPartition: aws
+  awsDnsSuffix: amazonaws.com
+
+# ─── 业务 root Application 集中声明 ─────────────────────────────────
+# 每条 entry → templates/applications.yaml range 渲染出一个 ArgoCD Application
+# Application 指向**本仓** uat-aws-hongkong/apps/ 第二层 chart,valueFiles 切产品
+# repoURL 走 GitLab(http://39.103.223.155/agentsphere,对齐 beijing)
+applications:
+
+  raytone-appofapps:
+    enabled: true
+    namespace: raytone-uat-aws-hongkong
+    cluster:
+      region: ap-east-1
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-workload-apps.git
+      targetRevision: main
+      path: ./uat-aws-hongkong/apps
+      helm:
+        valueFiles:
+          - values/raytone.yaml
+
+  # ─── demo:GitOps + Ingress + DNS 端到端探针(无业务依赖)─────────────
+  demo-appofapps:
+    enabled: false                   # 需要验证 GitOps/Ingress 链路时改 true
+    namespace: demo-uat-aws-hongkong
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-workload-apps.git
+      targetRevision: main
+      path: ./uat-aws-hongkong/apps
+      helm:
+        valueFiles:
+          - values/demo.yaml
+
+# ─── ArgoCD AppProject 集中声明 ─────────────────────────────────────
+# 宽松 sourceRepos/destinations/whitelist(* 通配),隔离靠 Argo RBAC + IRSA + NetworkPolicy
+projects:
+
+  raytone-uat-aws-hongkong:
+    description: "raytone Applications for uat-aws-hongkong environment"
+    sourceRepos:
+      - '*'
+    destinations:
+      - { namespace: '*', server: '*' }
+    clusterResourceWhitelist:
+      - { group: '*', kind: '*' }
+    namespaceResourceWhitelist:
+      - { group: '*', kind: '*' }
+    roles:
+      - name: readonly
+        policies:
+          - p, proj:raytone-uat-aws-hongkong:readonly, applications, get, raytone-uat-aws-hongkong/*, allow
+          - p, proj:raytone-uat-aws-hongkong:readonly, applications, sync, raytone-uat-aws-hongkong/*, deny
+
+  demo-uat-aws-hongkong:
+    description: "demo Applications for uat-aws-hongkong environment(GitOps 链路探针)"
+    sourceRepos:
+      - '*'
+    destinations:
+      - { namespace: '*', server: '*' }
+    clusterResourceWhitelist:
+      - { group: '*', kind: '*' }
+    namespaceResourceWhitelist:
+      - { group: '*', kind: '*' }
+    roles:
+      - name: readonly
+        policies:
+          - p, proj:demo-uat-aws-hongkong:readonly, applications, get, demo-uat-aws-hongkong/*, allow
+          - p, proj:demo-uat-aws-hongkong:readonly, applications, sync, demo-uat-aws-hongkong/*, deny

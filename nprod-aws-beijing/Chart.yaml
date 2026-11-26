@@ -1,0 +1,10 @@
+apiVersion: v2
+name: applications
+description: Workload App of Apps 第一层(N 产品线汇总 → 各 aws-eks-<product>-k8s 第二层)
+type: application
+version: 0.1.0
+appVersion: "1.0"
+
+# 本 chart 不依赖任何上游 chart,纯 templates 渲染 child Application
+# 每条产品线一份 templates/<product>-appofapps.yaml,指向 aws-eks-<product>-k8s 仓的 <env>/apps/(第二层 chart)
+# 当前接入:raytone / relitoken / agentmatrix(加产品线 = 加一份 template + values.yaml 加一组 enabled flag)

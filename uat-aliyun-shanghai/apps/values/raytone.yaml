@@ -1,0 +1,313 @@
+# raytone 产品所有 child Application(从 aws-eks-raytone-k8s 拉叶 manifest)
+spec:
+  destination:
+    server: https://kubernetes.default.svc
+
+# 由第一层 root Application 经 helm parameters 注入。
+cluster:
+  name: ""
+  domain: ""
+  env: ""
+
+applications:
+
+  # ─── platform:namespace / resourcequota / db-init Job(最早 sync) ───
+  codesphere-platform:
+    enabled: true
+    namespace: raytone-uat-aliyun-shanghai
+    project: raytone-uat-aliyun-shanghai
+    additionalAnnotations:
+      argocd.argoproj.io/sync-wave: "-100"
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aliyun-shanghai/platform
+
+  # ─── gateway:Go LLM token 网关数据面(2026-05-20 并入 raytone 命名空间) ───
+  # 业务代码仓:tokenplatform-gateway.git;历史服务名 relitoken-gateway。
+  gateway:
+    enabled: true
+    namespace: raytone-uat-aliyun-shanghai
+    project: raytone-uat-aliyun-shanghai
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aliyun-shanghai/gateway
+      helm:
+        releaseName: gateway
+        valueFiles: [values.yaml]
+
+  # ─── publisher:Go Redis Pub/Sub writer(2026-05-20 并入 raytone 命名空间) ───
+  # 业务代码仓:tokenplatform-publisher.git;历史服务名 relitoken-publisher。
+  publisher:
+    enabled: true
+    namespace: raytone-uat-aliyun-shanghai
+    project: raytone-uat-aliyun-shanghai
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aliyun-shanghai/publisher
+      helm:
+        releaseName: publisher
+        valueFiles: [values.yaml]
+
+  # ─── tokenplatform-rawbody-consumer:Kafka gw.raw_body → PG raw_body_events ingest ───
+  # 业务代码:tokenplatform-rawbody-consumer.git;消费 ApsaraMQ for Kafka gw.raw_body topic,
+  # 写入专属库 tokenplatform_rawbody(2026-05-27 建)
+  tokenplatform-rawbody-consumer:
+    enabled: true    # 2026-08-07 恢复上线(仅 consumer,KEDA 已在 chart 侧关闭);gateway raw_body 保持关闭
+    namespace: raytone-uat-aliyun-shanghai
+    project: raytone-uat-aliyun-shanghai
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aliyun-shanghai/tokenplatform-rawbody-consumer
+      helm:
+        releaseName: tokenplatform-rawbody-consumer
+        valueFiles: [values.yaml]
+
+  # ─── Raytone Studio 新链路(raytone-studio-api 后端 + raytone-studio-web 前端):public-saas-uat ───
+  # 默认关闭；独立 DB/Redis、Secret、镜像与 Authing 回调白名单准备完成后成对开启。
+  raytone-studio-api:
+    enabled: true
+    namespace: raytone-uat-aliyun-shanghai
+    project: raytone-uat-aliyun-shanghai
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aliyun-shanghai/raytone-studio-api
+      helm:
+        releaseName: raytone-studio-api
+        valueFiles: [values.yaml]
+        parameters:
+          - name: enabled
+            value: "true"
+
+  raytone-studio-web:
+    enabled: true
+    namespace: raytone-uat-aliyun-shanghai
+    project: raytone-uat-aliyun-shanghai
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aliyun-shanghai/raytone-studio-web
+      helm:
+        releaseName: raytone-studio-web
+        valueFiles: [values.yaml]
+        parameters:
+          - name: enabled
+            value: "true"
+
+  # ─── RDWORK 后端(rdwork-backend 一仓两入口:主面 + 模型转发面 /gw/v1,分支 uat)───
+  # 默认关闭。仍缺(需平台侧提供):上海 Admin 签发的 SAAS_PRODUCT_TOKEN(与 raytone-studio
+  #   共用同一产品,重签会连坐)、Authing client 6a475cd73d233dd9837af7ca 的 secret、
+  #   SKILLPLAZA_PARTNER_KEY 是否复用 207 那把;另 LEGACY_AUTH/AgentMatrix 两段未解决。
+  # ★ 开启顺序必须先 api 再 gateway:转发面复用 rdwork-api-config 这个 ConfigMap,
+  #   而两者是独立 Application,跨 Application 没有 sync-wave 顺序保证。
+  # ★ 本环境 NODE_ENV 填 prod(不是 test)—— 代码无 uat 枚举值,且 CONVENTIONS §8 要求
+  #   uat 与 prod 走完全相同的代码路径。
+  rdwork-api:
+    enabled: true
+    namespace: raytone-uat-aliyun-shanghai
+    project: raytone-uat-aliyun-shanghai
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aliyun-shanghai/rdwork-api
+      helm:
+        releaseName: rdwork-api
+        valueFiles: [values.yaml]
+        parameters:
+          - name: enabled
+            value: "true"
+
+  rdwork-gateway:
+    enabled: true
+    namespace: raytone-uat-aliyun-shanghai
+    project: raytone-uat-aliyun-shanghai
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aliyun-shanghai/rdwork-gateway
+      helm:
+        releaseName: rdwork-gateway
+        valueFiles: [values.yaml]
+        parameters:
+          - name: enabled
+            value: "true"
+
+  # ─── 智能体广场 SkillPlaza(skill-plaza-standalone,分支 uat,单进程全包)───
+  # 默认关闭。★ 有状态:PVC(RWO/20Gi/alicloud-disk-topology-alltype)承载 data/uploads
+  #   (UGC 上架的技能包,不可再生),因此单副本 + Recreate。
+  # ★ 首次开启后需一次性开窗跑 seed(chart values 里的 seed.enabled),跑完立刻改回 false —
+  #   seed 会 DELETE 内容表,重复执行即清库。
+  # 前置见 aws-eks-raytone-k8s/docs/2026-08-31-skill-plaza-nprod-integration.md
+  #   (nprod 版,上海的差异:ACR 镜像仓、库名不带 _v2、阿里云盘 SC、端口 8091@47.117.160.186)。
+  skill-plaza:
+    enabled: true
+    namespace: raytone-uat-aliyun-shanghai
+    project: raytone-uat-aliyun-shanghai
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aliyun-shanghai/skill-plaza
+      helm:
+        releaseName: skill-plaza
+        valueFiles: [values.yaml]
+        parameters:
+          - name: enabled
+            value: "true"
+
+  # ─── raytone-landing:品牌官网/营销 SPA ───
+  # UAT 上海如需公网访问,先回填域名或 NLB IP 后再打开 ingress。
+  raytone-landing:
+    enabled: true
+    namespace: raytone-uat-aliyun-shanghai
+    project: raytone-uat-aliyun-shanghai
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aliyun-shanghai/raytone-landing
+      helm:
+        releaseName: raytone-landing
+        valueFiles: [values.yaml]
+
+  # ─── codesphere-ops 3 后端(NestJS,monorepo 拆 3 独立 image) ───
+  codesphere-ops-user-api:
+    enabled: true
+    namespace: raytone-uat-aliyun-shanghai
+    project: raytone-uat-aliyun-shanghai
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aliyun-shanghai/codesphere-ops-user-api
+      helm:
+        releaseName: codesphere-ops-user-api
+        valueFiles: [values.yaml]
+
+  codesphere-ops-admin-api:
+    enabled: true
+    namespace: raytone-uat-aliyun-shanghai
+    project: raytone-uat-aliyun-shanghai
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aliyun-shanghai/codesphere-ops-admin-api
+      helm:
+        releaseName: codesphere-ops-admin-api
+        valueFiles: [values.yaml]
+
+  codesphere-ops-billing-api:    # +Kafka consumer;keda.enabled=false 用静态副本(UAT 未装 KEDA)
+    enabled: true
+    namespace: raytone-uat-aliyun-shanghai
+    project: raytone-uat-aliyun-shanghai
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aliyun-shanghai/codesphere-ops-billing-api
+      helm:
+        releaseName: codesphere-ops-billing-api
+        valueFiles: [values.yaml]
+
+  codesphere-ops-billing-openapi:    # Partner OpenAPI 门面,端口 8087;envFrom 复用 billing-api config/redis
+    enabled: true
+    namespace: raytone-uat-aliyun-shanghai
+    project: raytone-uat-aliyun-shanghai
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aliyun-shanghai/codesphere-ops-billing-openapi
+      helm:
+        releaseName: codesphere-ops-billing-openapi
+        valueFiles: [values.yaml]
+
+  # ─── codesphere-alerting:Nightingale center（ClusterIP；公网 8093 由 tcp-services 带外映射）───
+  # 数据库 ruidong_alerting 在上海 UAT RDS；连接串在集群 Secret codesphere-alerting-secret，不进 Git。
+  codesphere-alerting:
+    enabled: true
+    namespace: raytone-uat-aliyun-shanghai
+    project: raytone-uat-aliyun-shanghai
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aliyun-shanghai/codesphere-alerting
+      helm:
+        releaseName: codesphere-alerting
+        valueFiles: [values.yaml]
+
+  # ─── codesphere-ops 3 前端(nginx 静态镜像) ───
+  codesphere-ops-user-web:
+    enabled: true
+    namespace: raytone-uat-aliyun-shanghai
+    project: raytone-uat-aliyun-shanghai
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aliyun-shanghai/codesphere-ops-user-web
+      helm:
+        releaseName: codesphere-ops-user-web
+        valueFiles: [values.yaml]
+
+  codesphere-ops-admin-web:
+    enabled: true
+    namespace: raytone-uat-aliyun-shanghai
+    project: raytone-uat-aliyun-shanghai
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aliyun-shanghai/codesphere-ops-admin-web
+      helm:
+        releaseName: codesphere-ops-admin-web
+        valueFiles: [values.yaml]
+
+  # ─── 第三方 / 业务依赖 Helm chart(当前随 raytone 一起托管) ─────
+  # nats / searxng 仅 raytone 业务侧消费,不放部门通用 baseline。
+  # 入口位于 aws-eks-raytone-k8s/uat-aliyun-shanghai/middleware/<name>。
+  nats:
+    enabled: true
+    namespace: nats
+    project: raytone-uat-aliyun-shanghai
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aliyun-shanghai/middleware/nats
+      helm:
+        releaseName: nats        # 对齐 system-apps 时期 helm install 的 release name,labels 一致避免 selector 冲突
+        valueFiles: [values.yaml]
+
+  searxng:
+    enabled: true
+    namespace: searxng
+    project: raytone-uat-aliyun-shanghai
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aliyun-shanghai/middleware/searxng
+      helm:
+        releaseName: searxng        # 对齐 system-apps 时期 helm install 的 release name,labels 一致避免 selector 冲突
+        valueFiles: [values.yaml]
+
+  # ─── Bifrost LLM 网关(上游 maximhq/bifrost v2.0.0,镜像转推 ACR raytone-system/bifrost)───
+  # 前置已就位(2026-09-04):ACR repo + 镜像 v2.0.0;阿里云 RDS 库 bifrost + 账号 bifrost_user
+  # (走 RDS API 建,该实例无 master 账号);Secret 随 chart 进仓。
+  # ★ namespace 用业务 ns 而非单开 `bifrost` —— 上海 ACR 私有仓要 imagePullSecrets,而该 secret
+  #   由 ACK 凭证托管组件按 ns 注入且会轮换,新 ns 拿不到。详见 chart values.yaml。
+  # ★ 只起 ClusterIP;对外 8092 要另加 kube-system/tcp-services 键 + nginx-ingress-lb 端口
+  #   (两个带外对象,不在本仓)。集群内调用方应走
+  #   http://bifrost.raytone-uat-aliyun-shanghai.svc.cluster.local
+  bifrost:
+    enabled: true
+    namespace: bifrost
+    project: raytone-uat-aliyun-shanghai
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aliyun-shanghai/middleware/bifrost
+      helm:
+        releaseName: bifrost
+        valueFiles: [values.yaml]
+        # ★ 必须显式传:chart 的 values.yaml 里 enabled 默认 false,不传则整个 chart
+        #   零资源渲染,而 ArgoCD 会把「零资源」报成 Synced+Healthy(香港 rdwork 踩过)。
+        parameters:
+          - name: enabled
+            value: "true"

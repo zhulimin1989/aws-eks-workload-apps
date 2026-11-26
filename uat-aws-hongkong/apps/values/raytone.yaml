@@ -1,0 +1,342 @@
+# raytone 产品所有 child Application(从 aws-eks-raytone-k8s 拉叶 manifest)
+spec:
+  destination:
+    server: https://kubernetes.default.svc
+
+# 由第一层 root Application 经 helm parameters 注入(占位即可)
+cluster:
+  name: ""
+  domain: ""
+  env: ""
+
+applications:
+
+  # ─── platform:namespace / resourcequota / db-init Job(最早 sync) ───
+  codesphere-platform:
+    namespace: raytone-uat-aws-hongkong
+    project: raytone-uat-aws-hongkong
+    additionalAnnotations:
+      argocd.argoproj.io/sync-wave: "-100"
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aws-hongkong/platform
+
+  # ─── gateway:Go LLM token 网关数据面 ───
+  gateway:
+    enabled: true
+    namespace: raytone-uat-aws-hongkong
+    project: raytone-uat-aws-hongkong
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aws-hongkong/gateway
+      helm:
+        releaseName: gateway
+        valueFiles: [values.yaml]
+
+  # ─── publisher:Go Redis Pub/Sub writer ───
+  publisher:
+    enabled: true
+    namespace: raytone-uat-aws-hongkong
+    project: raytone-uat-aws-hongkong
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aws-hongkong/publisher
+      helm:
+        releaseName: publisher
+        valueFiles: [values.yaml]
+
+  # ─── tokenplatform-rawbody-consumer:Kafka gw.raw_body → PG raw_body_events ingest ───
+  tokenplatform-rawbody-consumer:
+    enabled: true    # 2026-08-07 恢复上线(仅 consumer);gateway raw_body 生产端保持关闭
+    namespace: raytone-uat-aws-hongkong
+    project: raytone-uat-aws-hongkong
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aws-hongkong/tokenplatform-rawbody-consumer
+      helm:
+        releaseName: tokenplatform-rawbody-consumer
+        valueFiles: [values.yaml]
+
+  # ─── raytone-landing:品牌官网/营销 SPA(codesphere.run + www.codesphere.run)───
+  raytone-landing:
+    enabled: true
+    namespace: raytone-uat-aws-hongkong
+    project: raytone-uat-aws-hongkong
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aws-hongkong/raytone-landing
+      helm:
+        releaseName: raytone-landing
+        valueFiles: [values.yaml]
+
+  # ─── codesphere-ops 3 后端(NestJS,monorepo 拆 3 独立 image) ───
+  codesphere-ops-user-api:
+    enabled: true
+    namespace: raytone-uat-aws-hongkong
+    project: raytone-uat-aws-hongkong
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aws-hongkong/codesphere-ops-user-api
+      helm:
+        releaseName: codesphere-ops-user-api
+        valueFiles: [values.yaml]
+
+  codesphere-ops-admin-api:
+    enabled: true
+    namespace: raytone-uat-aws-hongkong
+    project: raytone-uat-aws-hongkong
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aws-hongkong/codesphere-ops-admin-api
+      helm:
+        releaseName: codesphere-ops-admin-api
+        valueFiles: [values.yaml]
+
+  codesphere-ops-billing-api:
+    enabled: true
+    namespace: raytone-uat-aws-hongkong
+    project: raytone-uat-aws-hongkong
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aws-hongkong/codesphere-ops-billing-api
+      helm:
+        releaseName: codesphere-ops-billing-api
+        valueFiles: [values.yaml]
+
+  # ─── codesphere-ops-billing-openapi:对外 Partner OpenAPI 门面(独立 Deployment,公网仅 /partner/v1) ───
+  # 与 billing 同库(ruidong_billing)、复用其 ConfigMap/Redis Secret;core billing(3010)保持私网。
+  codesphere-ops-billing-openapi:
+    enabled: true
+    namespace: raytone-uat-aws-hongkong
+    project: raytone-uat-aws-hongkong
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aws-hongkong/codesphere-ops-billing-openapi
+      helm:
+        releaseName: codesphere-ops-billing-openapi
+        valueFiles: [values.yaml]
+
+  # ─── codesphere-alerting:Nightingale center（Ingress alerting.codesphere.run）───
+  # 数据库 ruidong_alerting 在香港 UAT RDS；连接串在集群 Secret codesphere-alerting-secret，不进 Git。
+  codesphere-alerting:
+    enabled: true
+    namespace: raytone-uat-aws-hongkong
+    project: raytone-uat-aws-hongkong
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aws-hongkong/codesphere-alerting
+      helm:
+        releaseName: codesphere-alerting
+        valueFiles: [values.yaml]
+
+  # ─── codesphere-ops 3 前端(nginx 静态镜像) ───
+  codesphere-ops-user-web:       # platform.codesphere.run
+    enabled: true
+    namespace: raytone-uat-aws-hongkong
+    project: raytone-uat-aws-hongkong
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aws-hongkong/codesphere-ops-user-web
+      helm:
+        releaseName: codesphere-ops-user-web
+        valueFiles: [values.yaml]
+
+  codesphere-ops-admin-web:      # admin.codesphere.run
+    enabled: true
+    namespace: raytone-uat-aws-hongkong
+    project: raytone-uat-aws-hongkong
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aws-hongkong/codesphere-ops-admin-web
+      helm:
+        releaseName: codesphere-ops-admin-web
+        valueFiles: [values.yaml]
+  # ─── skill-plaza:智能体广场(单进程全包:前端页面 + /api + skill zip) ───
+  # ★ 带 PVC(gp3/RWO) —— data/uploads 是 UGC 上架的技能包,不挂卷则 pod 重建即真丢;
+  #   PVC 与 Deployment 同 wave(都是 2),排它前面会与 WaitForFirstConsumer 死锁。
+  skill-plaza:
+    enabled: true
+    namespace: raytone-uat-aws-hongkong
+    project: raytone-uat-aws-hongkong
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aws-hongkong/skill-plaza
+      helm:
+        releaseName: skill-plaza
+        valueFiles: [values.yaml]
+
+  # ─── rdwork-api:RDWORK 主面 /v1 ───
+  # ★ 开启顺序:先本条,再 rdwork-gateway —— 转发面复用本 chart 产出的 rdwork-api-config,
+  #   而跨 Application 之间没有 sync-wave 顺序保证。
+  rdwork-api:
+    enabled: true
+    namespace: raytone-uat-aws-hongkong
+    project: raytone-uat-aws-hongkong
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aws-hongkong/rdwork-api
+      helm:
+        releaseName: rdwork-api
+        valueFiles: [values.yaml]
+        # ★ 必须显式传:chart 的 values.yaml 里 enabled 默认 false,不传则整个 chart
+        #   一个资源都不渲染,而 ArgoCD 会把「零资源」报成 Synced+Healthy —— 看起来上线了,
+        #   实际什么都没建(2026-09-03 实测踩过)。
+        parameters:
+          - name: enabled
+            value: "true"
+
+  # ─── rdwork-gateway:RDWORK 模型转发面 /gw/v1(与主面同镜像,只换 command) ───
+  # ★ 探活是 /healthz 不带 /v1 前缀;镜像 tag 必须与 rdwork-api 一致(同一镜像)。
+  rdwork-gateway:
+    enabled: true
+    namespace: raytone-uat-aws-hongkong
+    project: raytone-uat-aws-hongkong
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aws-hongkong/rdwork-gateway
+      helm:
+        releaseName: rdwork-gateway
+        valueFiles: [values.yaml]
+        # ★ 必须显式传:chart 的 values.yaml 里 enabled 默认 false,不传则整个 chart
+        #   一个资源都不渲染,而 ArgoCD 会把「零资源」报成 Synced+Healthy —— 看起来上线了,
+        #   实际什么都没建(2026-09-03 实测踩过)。
+        parameters:
+          - name: enabled
+            value: "true"
+
+  # ─── raytone-studio-api:Studio 后端(FastAPI) ───
+  # ★★ 登录当前不可用且关不掉:OIDC 对端(平台 SSO Broker)的实现只在 codesphere-user 的
+  #    test 分支上,而本集群 user-api 跑 uat 分支。详见该 chart values.yaml 顶部。
+  raytone-studio-api:
+    enabled: true
+    namespace: raytone-uat-aws-hongkong
+    project: raytone-uat-aws-hongkong
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aws-hongkong/raytone-studio-api
+      helm:
+        releaseName: raytone-studio-api
+        valueFiles: [values.yaml]
+
+  # ─── raytone-studio-web:Studio 前端(nginx 托产物 + /api 同源反代) ───
+  # ★ 镜像必须用 BUILD_MODE=public-saas-hk 构建 —— 上海/nprod 那两份 mode 把
+  #   VITE_SAAS_PORTAL_URL 写死成各自环境的 IP,照抄会把用户导到另一个环境去登录。
+  raytone-studio-web:
+    enabled: true
+    namespace: raytone-uat-aws-hongkong
+    project: raytone-uat-aws-hongkong
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aws-hongkong/raytone-studio-web
+      helm:
+        releaseName: raytone-studio-web
+        valueFiles: [values.yaml]
+
+
+  # ─── 第三方 / 业务依赖 Helm chart(原 system-apps,raytone 专属故归此处)─────
+  # nats / searxng 仅 raytone 业务侧消费,部门 baseline 不含;
+  # chart 位于 aws-eks-raytone-k8s/helm/<name>。
+  nats:
+    namespace: nats
+    project: raytone-uat-aws-hongkong
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aws-hongkong/middleware/nats
+      helm:
+        releaseName: nats        # 对齐 system-apps 时期 helm install 的 release name,labels 一致避免 selector 冲突
+        valueFiles: [values.yaml]
+
+  # ─── Bifrost LLM 网关(上游 maximhq/bifrost v2.0.0)───
+  # ★ 对外走 Ingress bifrost.codesphere.run(通配 DNS + 通配证书开箱即用),**不用 tcp-services
+  #   裸端口** —— 香港形态比 nprod/上海都好,不欠那笔带外账。
+  # ★★ 但 chart 里 ingress.enabled 默认 false:必须先起服务 → port-forward 建管理员 +
+  #   开 enforce_auth_on_inference → 再翻 ingress。Bifrost 建出管理员前 dashboard/API 无口令。
+  # 库/角色由 platform 的 db-init PreSync hook 按 DB_SPECS 建(2026-09-04 已跑通)。
+  bifrost:
+    enabled: true
+    namespace: bifrost
+    project: raytone-uat-aws-hongkong
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aws-hongkong/middleware/bifrost
+      helm:
+        releaseName: bifrost
+        valueFiles: [values.yaml]
+        # ★ 必须显式传:chart 默认 enabled=false,不传则零资源渲染而 ArgoCD 把零资源
+        #   报成 Synced+Healthy(本环境 rdwork 刚踩过)。
+        parameters:
+          - name: enabled
+            value: "true"
+
+  searxng:
+    namespace: searxng
+    project: raytone-uat-aws-hongkong
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aws-hongkong/middleware/searxng
+      helm:
+        releaseName: searxng        # 对齐 system-apps 时期 helm install 的 release name,labels 一致避免 selector 冲突
+        valueFiles: [values.yaml]
+
+  # ─── 集群可观测性:日志采集 / Loki / Prometheus / Grafana ───
+  logging-stack:
+    namespace: logging
+    project: raytone-uat-aws-hongkong
+    additionalAnnotations:
+      argocd.argoproj.io/sync-wave: "-20"
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aws-hongkong/observability/logging-stack
+      helm:
+        releaseName: logging-operator
+        valueFiles: [values.yaml]
+    # 首次由 Argo CD 接管现有手工部署资源,稳定后再开启 prune。
+    syncPolicy:
+      automated:
+        selfHeal: true
+        prune: false
+      syncOptions:
+        - CreateNamespace=true
+        - ServerSideApply=true
+
+  kube-prometheus-stack:
+    namespace: monitoring
+    project: raytone-uat-aws-hongkong
+    additionalAnnotations:
+      argocd.argoproj.io/sync-wave: "-10"
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-raytone-k8s.git
+      targetRevision: main
+      path: uat-aws-hongkong/observability/kube-prometheus-stack
+      helm:
+        releaseName: kube-prometheus-stack
+        valueFiles: [values.yaml]
+    # 首次由 Argo CD 接管现有手工部署资源,稳定后再开启 prune。
+    syncPolicy:
+      automated:
+        selfHeal: true
+        prune: false
+      syncOptions:
+        - CreateNamespace=true
+        - ServerSideApply=true

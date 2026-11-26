@@ -1,0 +1,9 @@
+apiVersion: v2
+name: applications
+description: Workload App of Apps 第一层(N 产品线汇总 → 各 aws-eks-<product>-k8s 第二层)
+type: application
+version: 0.1.0
+appVersion: "1.0"
+
+# 本 chart 不依赖任何上游 chart,纯 templates 渲染第一层 root Application。
+# 当前北京环境只保留 raytone app-of-apps;如需新增产品线,只改 `values.yaml` entry 即可。

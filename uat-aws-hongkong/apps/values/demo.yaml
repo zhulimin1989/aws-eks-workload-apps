@@ -1,0 +1,33 @@
+# demo 产品所有 child Application(从 aws-eks-demo-k8s 拉叶 manifest)
+# GitOps 链路探针,无业务依赖;默认不部署,需要 demo 时把第一层 prod-demo-appofapps.enabled=true
+spec:
+  destination:
+    server: https://kubernetes.default.svc
+
+# 由第一层 root Application 经 helm parameters 注入(占位即可)
+cluster:
+  name: ""
+  domain: ""
+  env: ""
+
+applications:
+
+  # ─── platform:demo namespace(最早 sync) ───
+  prod-demo-platform:
+    namespace: demo
+    project: demo-uat-aws-hongkong
+    additionalAnnotations:
+      argocd.argoproj.io/sync-wave: "-100"
+    source:
+      repoURL: https://github.com/RaytoneLAB/aws-eks-demo-k8s
+      targetRevision: main
+      path: uat-aws-hongkong/platform
+
+  # ─── atom:Atom 个性化欢迎页 + 链路探针(纯 HTML,无 RBAC)───
+  prod-demo-atom:
+    namespace: demo
+    project: demo-uat-aws-hongkong
+    source:
+      repoURL: https://github.com/RaytoneLAB/aws-eks-demo-k8s
+      targetRevision: main
+      path: uat-aws-hongkong/demo-atom

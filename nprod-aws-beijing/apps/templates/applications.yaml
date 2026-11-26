@@ -1,0 +1,99 @@
+# 第二层 child Application — range 渲染
+# 每条 values.applications.<name> → 一个 Application 指向产品 k8s 仓的叶 manifest 目录
+# cluster.name / cluster.domain / cluster.env 由第一层经 helm parameters 注入,本层透传给叶 chart(如有)
+{{- range $appName, $appData := .Values.applications }}
+{{- if or (not (hasKey $appData "enabled")) $appData.enabled }}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{ $appName }}
+  namespace: argocd
+  {{- with $appData.additionalAnnotations }}
+  annotations:
+    {{- range $key, $value := . }}
+    {{ $key }}: {{ $value | quote }}
+    {{- end }}
+  {{- end }}
+  {{- with $appData.additionalLabels }}
+  labels:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: {{ $appData.project }}
+  destination:
+    server: {{ $.Values.spec.destination.server }}
+    namespace: {{ $appData.namespace }}
+  source:
+    repoURL: {{ $appData.source.repoURL | quote }}
+    targetRevision: {{ $appData.source.targetRevision }}
+    path: {{ $appData.source.path }}
+    {{- if $appData.source.helm }}
+    helm:
+      {{- with $appData.source.helm.releaseName }}
+      releaseName: {{ . | quote }}
+      {{- end }}
+      {{- with $appData.source.helm.valueFiles }}
+      valueFiles:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # 透传 cluster 上下文(给业务叶 chart 用)
+      parameters:
+        {{- with $appData.source.helm.parameters }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        - name: cluster.name
+          value: {{ $.Values.cluster.name | quote }}
+        - name: cluster.domain
+          value: {{ $.Values.cluster.domain | quote }}
+        - name: cluster.env
+          value: {{ $.Values.cluster.env | quote }}
+        - name: region
+          value: {{ $.Values.cluster.region | default "cn-north-1" | quote }}
+        - name: cluster.region
+          value: {{ $.Values.cluster.region | default "cn-north-1" | quote }}
+        - name: cluster.awsPartition
+          value: {{ $.Values.cluster.awsPartition | default "aws-cn" | quote }}
+        - name: cluster.awsDnsSuffix
+          value: {{ $.Values.cluster.awsDnsSuffix | default "amazonaws.com.cn" | quote }}
+    {{- else }}
+    directory:
+      recurse: true
+    {{- end }}
+  {{- with $appData.syncPolicy }}
+  syncPolicy:
+    {{- toYaml . | nindent 4 }}
+  {{- else }}
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: true
+    syncOptions:
+      - CreateNamespace=true
+      # ignoreDifferences 只作用于 diff 判定;不加此项时 sync 仍会按 chart 值写回
+      # /spec/replicas,把 HPA 扩出的副本压回 chart 的 2。
+      - RespectIgnoreDifferences=true
+  {{- end }}
+  {{- with $appData.ignoreDifferences }}
+  ignoreDifferences:
+    {{- toYaml . | nindent 4 }}
+  {{- else }}
+  # HPA owns live replica count; keep Git desired replicas stable without Argo fighting HPA.
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
+    - group: apps
+      kind: StatefulSet
+      jsonPointers:
+        - /spec/replicas
+  {{- end }}
+  {{- with $appData.info }}
+  info:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
+{{- end }}

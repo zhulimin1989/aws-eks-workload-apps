@@ -1,0 +1,10 @@
+apiVersion: v2
+name: workload-apps-inner
+description: App of Apps 第二层 — 集中渲染各产品的 child Application
+type: application
+version: 0.1.0
+appVersion: "1.0"
+
+# 本 chart 由第一层 root Application(prod-<product>-appofapps)引用,通过
+# valueFiles: values/<product>.yaml 切产品,渲染该产品下所有 child Application
+# 每个 child Application 指向产品 k8s 仓的叶 manifest 目录(prod/<service>/)

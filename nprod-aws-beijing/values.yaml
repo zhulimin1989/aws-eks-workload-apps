@@ -1,0 +1,125 @@
+spec:
+  destination:
+    server: https://kubernetes.default.svc
+  # 当前 env 名 — 由 ArgoCD root-app 渲染时通过 -f values.yaml 覆盖
+  env: nprod-aws-beijing
+
+# Cluster 上下文 — 由 root-app `helm --set cluster.name=... --set cluster.domain=...` 注入
+# 第一层 applications.yaml 把这俩值打进 helm parameters,传给第二层 chart;第二层再传给叶 chart
+cluster:
+  name: raytonelab-nprod-cn-north-1
+  domain: raystone.ai
+  region: cn-north-1
+  awsPartition: aws-cn
+  awsDnsSuffix: amazonaws.com.cn
+
+# ─── 业务 root Application 集中声明 ─────────────────────────────────
+# 每条 entry → templates/applications.yaml range 渲染出一个 ArgoCD Application
+# Application 指向**本仓** prod/apps/ 第二层 chart,valueFiles 切产品
+# 第二层 chart 里再 range 渲染产品的 child Application(指向产品 k8s 仓的叶 manifest)
+# 加新产品 = 加一条 entry + 加一份 prod/apps/values/<product>.yaml
+applications:
+
+  nprod-raytone-appofapps:
+    enabled: true                   # Beijing single-cluster nprod entry; child apps stay gated in values/raytone.yaml
+    namespace: raytone-nprod
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-workload-apps.git
+      targetRevision: main
+      path: ./nprod-aws-beijing/apps
+      helm:
+        valueFiles:
+          - values/raytone.yaml
+
+  # ─── demo:GitOps + Ingress + DNS 端到端探针(无业务依赖)─────────────
+  # podinfo + 2048;manifest 在 aws-eks-demo-k8s 仓
+  nprod-demo-appofapps:
+    enabled: false                   # 默认关闭省节点资源;需要 demo 时改 true
+    namespace: demo-nprod
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-workload-apps.git
+      targetRevision: main
+      path: ./nprod-aws-beijing/apps
+      helm:
+        valueFiles:
+          - values/demo.yaml
+
+# ─── ArgoCD AppProject 集中声明 ─────────────────────────────────────
+# 每条 entry → templates/projects.yaml range 渲染出一个 AppProject
+# 二层 child Application(产品仓 prod/apps/templates/<service>.yaml)spec.project 引用
+# 加新产品 = 加一条 entry
+# AppProject 走宽松 sourceRepos/destinations/clusterResourceWhitelist(* 通配)
+# 隔离主要靠:Argo RBAC roles + sub2api IAM + IRSA + NetworkPolicy
+projects:
+
+  raytone-nprod:
+    description: "raytone Applications for nprod environment"
+    sourceRepos:
+      - '*'
+    destinations:
+      - { namespace: '*', server: '*' }
+    clusterResourceWhitelist:
+      - { group: '*', kind: '*' }
+    namespaceResourceWhitelist:
+      - { group: '*', kind: '*' }
+    roles:
+      - name: readonly
+        policies:
+          - p, proj:raytone-nprod:readonly, applications, get, raytone-nprod/*, allow
+          - p, proj:raytone-nprod:readonly, applications, sync, raytone-nprod/*, deny
+
+  relitoken-nprod:
+    description: "relitoken Applications for nprod environment"
+    sourceRepos:
+      - '*'
+    destinations:
+      - { namespace: '*', server: '*' }
+    clusterResourceWhitelist:
+      - { group: '*', kind: '*' }
+    namespaceResourceWhitelist:
+      - { group: '*', kind: '*' }
+    roles:
+      - name: readonly
+        policies:
+          - p, proj:relitoken-nprod:readonly, applications, get, relitoken-nprod/*, allow
+          - p, proj:relitoken-nprod:readonly, applications, sync, relitoken-nprod/*, deny
+      - name: admin
+        policies:
+          - p, proj:relitoken-nprod:admin, applications, *, relitoken-nprod/*, allow
+          - p, proj:relitoken-nprod:admin, repositories, *, *, allow
+
+  demo-nprod:
+    description: "demo Applications for nprod environment(GitOps 链路探针)"
+    sourceRepos:
+      - '*'
+    destinations:
+      - { namespace: '*', server: '*' }
+    clusterResourceWhitelist:
+      - { group: '*', kind: '*' }
+    namespaceResourceWhitelist:
+      - { group: '*', kind: '*' }
+    roles:
+      - name: readonly
+        policies:
+          - p, proj:demo-nprod:readonly, applications, get, demo-nprod/*, allow
+          - p, proj:demo-nprod:readonly, applications, sync, demo-nprod/*, deny
+
+  agentmatrix-nprod:
+    description: "agentmatrix Applications for nprod environment"
+    sourceRepos:
+      - '*'
+    destinations:
+      - { namespace: '*', server: '*' }
+    clusterResourceWhitelist:
+      - { group: '*', kind: '*' }
+    namespaceResourceWhitelist:
+      - { group: '*', kind: '*' }
+    roles:
+      - name: readonly
+        policies:
+          - p, proj:agentmatrix-nprod:readonly, applications, get, agentmatrix-nprod/*, allow
+          - p, proj:agentmatrix-nprod:readonly, applications, sync, agentmatrix-nprod/*, deny
+      - name: admin
+        policies:
+          - p, proj:agentmatrix-nprod:admin, applications, *, agentmatrix-nprod/*, allow
+          - p, proj:agentmatrix-nprod:admin, repositories, *, *, allow

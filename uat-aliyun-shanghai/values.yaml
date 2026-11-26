@@ -1,0 +1,57 @@
+spec:
+  destination:
+    server: https://kubernetes.default.svc
+  # 当前环境名;root-app 渲染 UAT 上海环境时显式传入该 values 文件。
+  env: uat-aliyun-shanghai
+
+# Cluster 上下文由 root-app 通过 `helm --set` 注入。
+# 第一层模板把这些值透传给第二层 chart,第二层再继续传给各业务叶 chart。
+cluster:
+  name: raytone-uat-aliyun-sh-ack
+  domain: ""        # UAT 上海首版走 NLB IP + port;确认域名后再回填。
+
+# ─── 业务 root Application 集中声明 ─────────────────────────────────
+# 每条 entry → templates/applications.yaml range 渲染出一个 ArgoCD Application
+# Application 指向**本仓** `./uat-aliyun-shanghai/apps` 第二层 chart,再通过 valueFiles 选择产品。
+# 第二层 chart 再渲染该产品的 child Application,每个 child Application 指向对应 k8s 仓的叶 manifest。
+# UAT 上海当前只保留 raytone;如需扩展产品线,再补对应 values 文件和 entry。
+applications:
+
+  uat-aliyun-shanghai-raytone-appofapps:
+    enabled: true                 # ACK/中间件/镜像/密钥参数回填前保持关闭。
+    namespace: raytone-uat-aliyun-shanghai
+    # 不单独指定 cluster.server,默认落到当前 ACK 集群。
+    # region 固定为 cn-shanghai,供第二层和叶 chart 继续透传。
+    cluster:
+      region: cn-shanghai
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-workload-apps.git
+      targetRevision: main
+      path: ./uat-aliyun-shanghai/apps
+      helm:
+        valueFiles:
+          - values/raytone.yaml
+
+# ─── ArgoCD AppProject 集中声明 ─────────────────────────────────────
+# 每条 entry → templates/projects.yaml range 渲染出一个 AppProject
+# 二层 child Application 在各产品 chart 中通过 `spec.project` 引用这里定义的 AppProject。
+# UAT 上海当前只保留 raytone 一个项目。
+# AppProject 走宽松 sourceRepos/destinations/clusterResourceWhitelist(* 通配)
+# 隔离主要靠:Argo RBAC roles + sub2api IAM + RRSA + NetworkPolicy
+projects:
+
+  raytone-uat-aliyun-shanghai:
+    description: "raytone Applications for uat-aliyun-shanghai environment"
+    sourceRepos:
+      - '*'
+    destinations:
+      - { namespace: '*', server: '*' }
+    clusterResourceWhitelist:
+      - { group: '*', kind: '*' }
+    namespaceResourceWhitelist:
+      - { group: '*', kind: '*' }
+    roles:
+      - name: readonly
+        policies:
+          - p, proj:raytone-uat-aliyun-shanghai:readonly, applications, get, raytone-uat-aliyun-shanghai/*, allow
+          - p, proj:raytone-uat-aliyun-shanghai:readonly, applications, sync, raytone-uat-aliyun-shanghai/*, deny

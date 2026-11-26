@@ -1,0 +1,57 @@
+spec:
+  destination:
+    server: https://kubernetes.default.svc
+  # 当前 env 名 — 由 ArgoCD root-app 渲染时通过 -f values.yaml 覆盖
+  env: prod
+
+# Cluster 上下文 — 由 root-app `helm --set cluster.name=... --set cluster.domain=...` 注入
+# 第一层 applications.yaml 把这俩值打进 helm parameters,传给第二层 chart;第二层再传给叶 chart
+cluster:
+  name: ""          # e.g. raytonelab-prod-sg
+  domain: raytone.ai
+
+# ─── 业务 root Application 集中声明 ─────────────────────────────────
+# 每条 entry → templates/applications.yaml range 渲染出一个 ArgoCD Application
+# Application 指向**本仓** prod/apps/ 第二层 chart,valueFiles 切产品
+# 第二层 chart 里再 range 渲染产品的 child Application(指向产品 k8s 仓的叶 manifest)
+# 加新产品 = 加一条 entry + 加一份 prod/apps/values/<product>.yaml
+applications:
+
+  raytone-appofapps:
+    enabled: true                  # codesphere image 就绪后 true(否则装上 ImagePullBackOff)
+    namespace: raytone-prod
+    # use1 hub 部署:raytone 业务跑在 hub 自身(in-cluster),ECR image 拉 us-east-1
+    # 不写 cluster.server → fallback 到 spec.destination.server (https://kubernetes.default.svc)
+    cluster:
+      region: us-east-1
+    source:
+      repoURL: http://39.103.223.155/agentsphere/aws-eks-workload-apps.git
+      targetRevision: main
+      path: ./prod-aws-use1/apps
+      helm:
+        valueFiles:
+          - values/raytone.yaml
+
+# ─── ArgoCD AppProject 集中声明 ─────────────────────────────────────
+# 每条 entry → templates/projects.yaml range 渲染出一个 AppProject
+# 二层 child Application(产品仓 prod/apps/templates/<service>.yaml)spec.project 引用
+# 加新产品 = 加一条 entry
+# AppProject 走宽松 sourceRepos/destinations/clusterResourceWhitelist(* 通配)
+# 隔离主要靠:Argo RBAC roles + sub2api IAM + IRSA + NetworkPolicy
+projects:
+
+  raytone:
+    description: "raytone Applications for prod environment"
+    sourceRepos:
+      - '*'
+    destinations:
+      - { namespace: '*', server: '*' }
+    clusterResourceWhitelist:
+      - { group: '*', kind: '*' }
+    namespaceResourceWhitelist:
+      - { group: '*', kind: '*' }
+    roles:
+      - name: readonly
+        policies:
+          - p, proj:raytone:readonly, applications, get, raytone/*, allow
+          - p, proj:raytone:readonly, applications, sync, raytone/*, deny

@@ -1,0 +1,106 @@
+# 业务 root Application — 集中式 range 渲染
+# 每条 values.applications.<name> + enabled=true → 渲染一个 Application
+# 加新产品 = values.yaml 加一条 entry,本文件**零改动**
+#
+# 支持两种 source 形态:
+#   1. 产品 appofapps:source.path(指向本仓 prod/apps/ 第二层 chart)+ helm.valueFiles
+#      → 自动注入 cluster.{name,domain,env} 给二层 chart 用
+#   2. 直接装 upstream chart:source.chart + source.repoURL(指 helm repo)+ helm.values(inline yaml)
+#      → 不注入 cluster.* parameters
+{{- range $appName, $appData := .Values.applications }}
+{{- if $appData.enabled }}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{ $appName }}
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    {{- with $appData.additionalAnnotations }}
+    {{- range $key, $value := . }}
+    {{ $key }}: {{ $value | quote }}
+    {{- end }}
+    {{- end }}
+  {{- with $appData.additionalLabels }}
+  labels:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: {{ $appData.project | default "default" }}
+  source:
+    repoURL: {{ $appData.source.repoURL | quote }}
+    targetRevision: {{ $appData.source.targetRevision }}
+    {{- with $appData.source.path }}
+    path: {{ . }}
+    {{- end }}
+    {{- with $appData.source.chart }}
+    chart: {{ . }}
+    {{- end }}
+    {{- with $appData.source.helm }}
+    helm:
+      {{- with .valueFiles }}
+      valueFiles:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .values }}
+      values: |
+        {{- . | nindent 8 }}
+      {{- end }}
+      {{- if or $appData.source.path .parameters }}
+      parameters:
+        {{- with .parameters }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if $appData.source.path }}
+        # 产品 appofapps 才注入 cluster.* 给第二层 chart(直接装 upstream chart 的 App 不需要)
+        # 优先用 entry 自带的 cluster context($appData.cluster),fallback 到顶层 cluster:
+        # 跨 region 场景:prod-raytone-appofapps(sg)/ prod-raytone-appofapps-use1 各自带 cluster
+        # 用 sprig `dig` 安全 nested lookup($appData.cluster 整体可能不存在,直接 .name 会 nil panic)
+        - name: cluster.name
+          value: {{ dig "cluster" "name" $.Values.cluster.name $appData | quote }}
+        - name: cluster.domain
+          value: {{ dig "cluster" "domain" $.Values.cluster.domain $appData | quote }}
+        - name: cluster.env
+          value: {{ $.Values.spec.env | quote }}
+        # cluster.server / region 仅跨 region 场景需要;sg 默认走顶层 destination.server + ap-southeast-1
+        - name: cluster.server
+          value: {{ dig "cluster" "server" $.Values.spec.destination.server $appData | quote }}
+        - name: cluster.region
+          value: {{ dig "cluster" "region" "us-east-1" $appData | quote }}
+        {{- end }}
+      {{- end }}
+    {{- end }}
+  destination:
+    server: {{ $.Values.spec.destination.server }}
+    namespace: {{ $appData.namespace }}
+  {{- with $appData.syncPolicy }}
+  syncPolicy:
+    {{- toYaml . | nindent 4 }}
+  {{- else }}
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - Replace=true
+    retry:
+      limit: 2
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m0s
+  {{- end }}
+  {{- with $appData.ignoreDifferences }}
+  ignoreDifferences:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with $appData.info }}
+  info:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
+{{- end }}
